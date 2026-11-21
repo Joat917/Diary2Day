@@ -412,6 +412,104 @@ onBeforeUnmount(() => {
 
     <div class="scroll">
       <section class="group">
+        <h2 class="group-title">{{ t("me.data") }}</h2>
+        <div class="stats">
+          <div v-for="stat in stats" :key="stat.label" class="stat">
+            <span class="stat-label">{{ stat.label }}</span>
+            <span class="stat-value">{{ stat.value }}</span>
+          </div>
+        </div>
+        <div class="rows">
+          <div v-if="info && !mobile" class="row">
+            <div class="row-main">
+              <span class="label">{{ t("me.dataDir") }}</span>
+              <code class="path">{{ info?.data_dir ?? "—" }}</code>
+            </div>
+            <div class="dir-actions">
+              <button
+                class="icon-btn"
+                type="button"
+                :aria-label="t('me.openDataDir')"
+                @click="openFolder"
+              >
+                <Icon :path="mdiFolderOpenOutline" :size="20" />
+              </button>
+              <button
+                class="icon-btn"
+                type="button"
+                :aria-label="t('me.copyPath')"
+                @click="copyPath"
+              >
+                <Icon :path="mdiContentCopy" :size="18" />
+              </button>
+            </div>
+          </div>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="exportEntries"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.export") }}</span>
+            </span>
+            <Icon :path="mdiFileExportOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="importEntries"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.import") }}</span>
+            </span>
+            <Icon :path="mdiFileImportOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="backupData"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.backup") }}</span>
+              <span class="sub">{{ t("me.backupHint") }}</span>
+            </span>
+            <Icon :path="mdiCloudUploadOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="pickRestore"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.restore") }}</span>
+            </span>
+            <Icon :path="mdiCloudDownloadOutline" :size="20" />
+          </button>
+          <div v-if="opBusy" class="row">
+            <span class="label">{{ opLabel }}</span>
+            <span class="value">
+              {{
+                progress && progress.total > 0
+                  ? t("me.progress", { done: progress.done, total: progress.total })
+                  : "…"
+              }}
+            </span>
+          </div>
+          <div v-else-if="opError" class="row">
+            <span class="label">{{ t("me.opFailed") }}</span>
+            <span class="value warn">{{ opError }}</span>
+          </div>
+          <div v-else-if="notice" class="row">
+            <span class="value notice">{{ notice }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="group">
         <h2 class="group-title">{{ t("me.appearance") }}</h2>
         <div class="rows">
           <div class="row">
@@ -577,104 +675,6 @@ onBeforeUnmount(() => {
               </select>
               <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
             </span>
-          </div>
-        </div>
-      </section>
-
-      <section class="group">
-        <h2 class="group-title">{{ t("me.data") }}</h2>
-        <div class="stats">
-          <div v-for="stat in stats" :key="stat.label" class="stat">
-            <span class="stat-label">{{ stat.label }}</span>
-            <span class="stat-value">{{ stat.value }}</span>
-          </div>
-        </div>
-        <div class="rows">
-          <div v-if="info && !mobile" class="row">
-            <div class="row-main">
-              <span class="label">{{ t("me.dataDir") }}</span>
-              <code class="path">{{ info?.data_dir ?? "—" }}</code>
-            </div>
-            <div class="dir-actions">
-              <button
-                class="icon-btn"
-                type="button"
-                :aria-label="t('me.openDataDir')"
-                @click="openFolder"
-              >
-                <Icon :path="mdiFolderOpenOutline" :size="20" />
-              </button>
-              <button
-                class="icon-btn"
-                type="button"
-                :aria-label="t('me.copyPath')"
-                @click="copyPath"
-              >
-                <Icon :path="mdiContentCopy" :size="18" />
-              </button>
-            </div>
-          </div>
-          <button
-            class="row action-row"
-            type="button"
-            :disabled="opBusy"
-            @click="exportEntries"
-          >
-            <span class="action-main">
-              <span class="label">{{ t("me.export") }}</span>
-            </span>
-            <Icon :path="mdiFileExportOutline" :size="20" />
-          </button>
-          <button
-            class="row action-row"
-            type="button"
-            :disabled="opBusy"
-            @click="importEntries"
-          >
-            <span class="action-main">
-              <span class="label">{{ t("me.import") }}</span>
-            </span>
-            <Icon :path="mdiFileImportOutline" :size="20" />
-          </button>
-          <button
-            class="row action-row"
-            type="button"
-            :disabled="opBusy"
-            @click="backupData"
-          >
-            <span class="action-main">
-              <span class="label">{{ t("me.backup") }}</span>
-              <span class="sub">{{ t("me.backupHint") }}</span>
-            </span>
-            <Icon :path="mdiCloudUploadOutline" :size="20" />
-          </button>
-          <button
-            class="row action-row"
-            type="button"
-            :disabled="opBusy"
-            @click="pickRestore"
-          >
-            <span class="action-main">
-              <span class="label">{{ t("me.restore") }}</span>
-            </span>
-            <Icon :path="mdiCloudDownloadOutline" :size="20" />
-          </button>
-          <div v-if="opBusy" class="row">
-            <span class="label">{{ opLabel }}</span>
-            <span class="value">
-              {{
-                progress && progress.total > 0
-                  ? t("me.progress", { done: progress.done, total: progress.total })
-                  : "…"
-              }}
-            </span>
-          </div>
-          <div v-else-if="opError" class="row">
-            <span class="label">{{ t("me.opFailed") }}</span>
-            <span class="value warn">{{ opError }}</span>
-          </div>
-          <div v-else-if="notice" class="row">
-            <span class="value notice">{{ notice }}</span>
           </div>
         </div>
       </section>
@@ -965,7 +965,6 @@ onBeforeUnmount(() => {
 .time-input {
   padding-inline: var(--s-3);
   font-variant-numeric: tabular-nums;
-  color-scheme: light dark;
 }
 
 .select-chevron {

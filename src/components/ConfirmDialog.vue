@@ -135,7 +135,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 .button.solid.danger {
   background: var(--c-danger);
-  color: #ffffff;
+  color: var(--c-on-danger);
 }
 
 .dialog-enter-active,
