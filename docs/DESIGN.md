@@ -35,6 +35,7 @@ src-tauri/src/
   fs/
     assets.rs       附件写入、缩略图产出、64MB 上限与类型嗅探
   export.rs         导出人可读目录 / 备份 zip / 恢复整库（§6.4–§6.5，含进度事件）
+  backup_crypt.rs   备份包可选口令加密：`.ddbak` 头与分块帧、Argon2id 派生、解密校验（§6.5）
   share.rs          移动端分享收件箱 → 附件导入 + 新条目（§6.6）
   commands/         #[tauri::command] 薄壳：解参 → 调上面模块 → 映射 AppError
     journal.rs tag.rs search.rs settings.rs media.rs data.rs lock.rs app.rs share.rs
@@ -178,14 +179,14 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `media_import` | `files[{origName, data(base64)}]` → `Asset[]` | 字节走 IPC 而不是路径：粘贴、拖入、移动端选择器都只有 `File`，不给 Rust 假设本地路径存在。单文件 64 MB 上限；扩展名缺失时按 magic 嗅探；图片抽尺寸并产出缩略图（§3.1） |
 | `share_drain` | → `ShareReport{id, dayKey, assets}` 或 `null` | 移动端分享收件箱：Kotlin `MainActivity` 把系统分享的文本/文件写进 `cache/share-inbox`，命令校验路径、导入资产并建条目（§6.6）。锁态返回 `locked`，收件箱保留待解锁重试 |
 | `data_export_dir` | `target_dir` → `ExportReport{dir, journals, assets}` | 桌面。同步等待完成；在 `target_dir` 下新建 `Diary2Day-<ts>/`，人可读 md + `assets/`（PRD §5.2、§6.4）。Android 走 `data_export_android`（§3.2） |
-| `data_backup` | `target` → `BackupReport{path, size}` | 桌面。`VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip（§6.5）。Android 走 `data_backup_android` |
-| `data_restore` | `path` → `ImportReport{journals, assets}` | 桌面。只支持整库替换，不做 merge；校验 schema 后换连接并重载锁运行时（§6.5）。Android 走 `data_pick_restore_android` + `data_restore_android` |
+| `data_backup` | `target, password?` → `BackupReport{path, size}` | 桌面。`VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip；带口令时再加密成 `.ddbak`（§6.5）。Android 走 `data_backup_android` |
+| `data_restore` | `path, password?` → `ImportReport{journals, assets}` | 桌面。只支持整库替换，不做 merge；加密包先解密再校验 schema、换连接并重载锁运行时（§6.5）。Android 走 `data_pick_restore_android` + `data_restore_android` |
 | `data_import_md` | `dir` → `ImportReport{journals, assets}` | 桌面。与 export 对称（§6.4）；同一 `id` 按 upsert 处理。Android 走 `data_import_android` |
 | `data_export_android` | → `ExportReport` 或 `null` | Android。`Picker::pick_dir` 选目标树，`cache/export` 暂存后逐文件写入 SAF；取消返回 `null`（§3.2） |
 | `data_import_android` | → `ImportReport` 或 `null` | Android。`pick_dir` → `cache/import` → 复用 `import_dir`；取消 `null` |
-| `data_backup_android` | → `BackupReport{path, size}` 或 `null` | Android。`save_file` 先定 zip 位置，`cache/backup-out` 打包后写入 URI；`path` 是显示名而非绝对路径 |
-| `data_pick_restore_android` | → `PickedBackup{path}` 或 `null` | Android。`pick_file` 选 zip 并复制到 `cache/restore-pick`；前端确认后再调 `data_restore_android` |
-| `data_restore_android` | `path` → `ImportReport{journals, assets}` | Android。复用 `export::restore`，成功后清空 `restore-pick` |
+| `data_backup_android` | `password?` → `BackupReport{path, size}` 或 `null` | Android。`save_file` 先定位置（无口令 `.zip` + `application/zip`，有口令 `.ddbak` + `application/octet-stream`），`cache/backup-out` 打包后写入 URI；`path` 是显示名而非绝对路径 |
+| `data_pick_restore_android` | → `PickedBackup{path}` 或 `null` | Android。`pick_file` 选 zip / ddbak 并复制到 `cache/restore-pick`；前端确认后再调 `data_restore_android` |
+| `data_restore_android` | `path, password?` → `ImportReport{journals, assets}` | Android。复用 `export::restore`，成功后清空 `restore-pick` |
 | `data_info` | → `DataInfo{db_path, data_dir, sizes{...}, counts{...}, mobile}` | 关于页与"打开数据目录"用；移动端 `db_path` 返回 `null`，`mobile=true` 让前端隐藏目录行并切到 SAF 动作 |
 | `data_rebuild` | `what(day_mark｜fts｜tags｜assets)` → `Report` | 诊断页入口 |
 | `app_lock_status` / `app_lock_set` / `app_lock_clear` / `app_lock_unlock` / `app_lock_engage` | `code?` → `LockState{enabled, locked}` | UI 门（PRD §5.4）。`set` 只收新口令，`clear` / `unlock` 收当前口令；`engage` 由前端失焦计时触发 |
@@ -225,7 +226,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开，`plugin-dialog` 也拿不到目标目录。因此移动端的导出 / 导入 / 备份 / 恢复由 `tauri-plugin-android-fs`（`=30.2.0`，只在 `[target.'cfg(target_os = "android")'.dependencies]` 下引入）承担；不为文件 IO 写自定义 Kotlin 插件。
 
 - **选择**：`Picker::pick_dir` / `pick_file` / `save_file`。取消统一映射成 `Option::None`，IPC 返回 `null`，前端当作"原样返回"。
-- **暂存**：命令里先按桌面同一条管线在 `cache_dir/<op>`（`export` / `import` / `backup-out` / `restore-pick`）生成目录或 zip，再用插件返回的 std `File`（`open_file_writable` / `open_file_readable`）与 `std::io::copy` 搬运；字节不过 IPC。成功与失败都清理暂存目录。
+- **暂存**：命令里先按桌面同一条管线在 `cache_dir/<op>`（`export` / `import` / `backup-out` / `restore-pick` / `restore-decrypt`）生成目录、备份包或解密后的 zip，再用插件返回的 std `File`（`open_file_writable` / `open_file_readable`）与 `std::io::copy` 搬运；字节不过 IPC。成功与失败都清理暂存目录。
 - **目录树**：复制递归走 `read_dir` + `create_dir_all_and_return_relative_path` + `create_new_file`；文件名先经 `safe_name` 去掉路径分隔符。
 - **命令装配**：全部 `#[cfg(target_os = "android")]`（`commands/android_data.rs`），桌面构建不编译；`generate_handler!` 里的对应条目同样带 `cfg`。前端按 `data_info.mobile` 选命令集，进度行、错误行、恢复确认与成功后重载的流程不变。
 - **分享出**：插件自带的 `Opener::share_file` / `share_files` 可把暂存文件交给系统分享面板。暂不单独做"分享条目"入口——后续导出加密时会弹出选择窗口，分享与保存两个按钮就放在那个窗口里，共用同一份暂存文件。
@@ -318,7 +319,9 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 **文件名带 id** 保证导入对称：`md_doc.rs` 同一份 front-matter 读写 + 路径双向映射被 export 和 import 共用，重复导入同一目录按 `id` upsert。测试判据："导出 → 导入 → 导出，目录内容逐字节相等（除 `updated_at`）"。
 
 **6.5 备份 / 恢复 / 锁**
-备份 = `VACUUM INTO 'cache/backup/live.db'` + assets + `manifest.json{app_version, schema_version, counts, created_at, media_included}` → zip。恢复 = 校验 manifest（`schema_version` 高于当前 → `restore_version_mismatch`，提示先升级应用）→ 解包到 `cache/restore/` → checkpoint 后用占位连接换出旧库、复制新库并重开迁移 → 从新库重载 `app_lock` 运行时并 emit `dd://lock-state` → 广播 `all` 失效。恢复是整库替换，没有 merge 策略。Android 上备份位置由 `data_backup_android` 的 `save_file` 决定；恢复前 `data_pick_restore_android` 先把选的 zip 复制进 `cache/restore-pick`，确认后再走同一条恢复管线（§3.2）。
+备份 = `VACUUM INTO 'cache/backup/live.db'` + assets + `manifest.json{app_version, schema_version, counts, created_at, media_included}` → zip。恢复 = 校验 manifest（`schema_version` 高于当前 → `restore_version_mismatch`，提示先升级应用）→ 解包到 `cache/restore/` → checkpoint 后用占位连接换出旧库、复制新库并重开迁移 → 从新库重载 `app_lock` 运行时并 emit `dd://lock-state` → 广播 `all` 失效。恢复是整库替换，没有 merge 策略。Android 上备份位置由 `data_backup_android` 的 `save_file` 决定；恢复前 `data_pick_restore_android` 先把选的备份包（zip / ddbak）复制进 `cache/restore-pick`，确认后再走同一条恢复管线（§3.2）。
+
+**加密备份**：`.ddbak` = 68 字节明文头 + 帧流。头：magic `DD2BAK01`、版本、KDF（Argon2id）、算法（XChaCha20-Poly1305）、m/t/p、块大小、16B salt、24B nonce 基。帧：`[u32 明文长度][密文+16B tag]`，零长尾帧收尾；帧 nonce = nonce 基后 8 字节 + 帧号（BE），AAD = 头部，因此重排、截断、改头都会认证失败。`backup()` 带口令时先生成普通 zip 到 `cache/backup/payload.zip`，再流式加密到目标并删除中间包；`restore()` 读头判定，加密包缺口令返回 `password_required`，解密失败统一 `bad_password`，解密到 `cache/restore-decrypt/`，完整解密后才进入整库替换，结束后无论成败都删掉这份明文 zip。无口令的普通 zip 路径完全不变。
 锁 = 口令经 SHA-256(`salt:code`) 存 `app_lock` 单行表，前端 `LockOverlay` 与 Rust 门禁双保险：锁态期间 `run_blocking` 直接返回 `locked`；前端监听 `window blur` / `visibilitychange` 起 `lockLeaveDelayS` 计时（0 表示从不），到点调 `app_lock_engage`。设置与锁状态查询走 `run_blocking_public`，保证锁屏也能渲染主题；`asset_paths` 同样公开（只返回目录路径）。启动即锁定时 `App.vue` 的 `viewsReady` 拦住路由视图挂载，第一次解锁后才挂载并取数；解锁时再递增 `viewEpoch` 强制重建，运行时加锁则保留视图、只盖遮罩。`asset` 协议本身不参与锁门禁（§3.1）。明确告诉用户这是 UI 门，文件不加密。
 
 **6.6 分享接收（Android）**
@@ -350,7 +353,7 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 
 ## 8. 依赖
 
-**Rust**：`tauri@2` + `tauri-plugin-dialog` / `tauri-plugin-opener`、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset，本地偏移取 `chrono::Local`)、`base64`（`media_import` 与游标）、`tokio`(随 tauri)、`sha2`(锁口令，SHA-256)、`zip`、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 开 `jpeg`/`png`/`webp`/`gif`/`bmp`，出缩略图用)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
+**Rust**：`tauri@2` + `tauri-plugin-dialog` / `tauri-plugin-opener`、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset，本地偏移取 `chrono::Local`)、`base64`（`media_import` 与游标）、`tokio`(随 tauri)、`sha2`(锁口令，SHA-256)、`zip`、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 开 `jpeg`/`png`/`webp`/`gif`/`bmp`，出缩略图用)、`argon2`(备份口令 KDF)、`chacha20poly1305`(XChaCha20-Poly1305)、`getrandom`(salt/nonce)、`zeroize`(派生密钥擦除)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
 
 **前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`vite`、`typescript`。月历与格子规格在 UI.md §3.2，自己实现；附件缩放（UI.md §3.10）用 pointer 事件与 `transform` 写在 `AssetViewer.vue` 里，不引 panzoom；日期显示走 `Intl`（§5）。
 
@@ -393,6 +396,8 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 - `search`：三字符走 FTS、单/双字符走兜底且 `partial=true`、结果集只含存活条目、`sensitive` 仅在解锁态参与、码点偏移与 `chars()` 计数一致。
 - `journal_save` 并发：去抖到点与显式冲刷同时提交 → 一次成功写入，另一次得到 `bad_revision` 并被上层丢弃。
 
+`backup_crypt` 用临时目录做全流程：同一口令 encrypt → decrypt 逐字节相等（空文件、短内容、正好一块、多块跨帧）；错误口令、密文篡改、尾部截断一律 `bad_password`；普通 zip 不被 `is_encrypted` 误判。
+
 前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
 
 ---
@@ -420,7 +425,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | Clean Architecture 分层、领域事件总线 | 上限三层 `commands → db/domain → fs` | 无 |
 | 编辑器抽象接口（可换 Vditor/CodeMirror） | 直接面向 Vditor API 写 `EditorPane` | V-3 判定 Vditor 不可用时，整体替换 `EditorPane` 内部实现 |
 | `@tauri-apps/plugin-sql` | 查询在 Rust 内核，schema/迁移/FTS 策略都在同一层 | 想让第三方直接复用前端时 |
-| `plugin-store`、`plugin-fs`、`plugin-upload`、`plugin-stronghold` | settings 进 SQLite；文件能力走自己的 `fs/` 命令；上传场景在桌面/移动里就是系统选择器；加密按 PRD §5 判定 | 出现前端需要直接读写任意路径的需求 |
+| `plugin-store`、`plugin-fs`、`plugin-upload`、`plugin-stronghold` | settings 进 SQLite；文件能力走自己的 `fs/` 命令；上传场景在桌面/移动里就是系统选择器；备份包加密用 RustCrypto（§6.5），整库加密按 PRD §5 不做 | 出现前端需要直接读写任意路径的需求 |
 | TanStack Query | `useCollection()`（20 行）+ `dd://data-changed` 事件驱动失效 | 视图数超过 8 个或出现跨页缓存共享 |
 | Tailwind/UnoCSS、VueUse、`vue-i18n`、`dayjs`/`date-fns`、日历与图标字体、连接池以外的 UI 库 | UI.md 的 token + 手写月历 + `@mdi/js` 常量 + `Intl` + 100 行 `t()` | token 体系撑不住多主题时；语言数超过 4 种时 |
 | 图片压缩、转码、EXIF 清理、视频首帧图 | §3.1 那张缩略图是唯一加工 | 用户真实反馈原图过大时，且届时要给导出留"存原图"开关 |

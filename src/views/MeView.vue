@@ -26,6 +26,7 @@ import {
   dataRestore,
   dataRestoreAndroid,
   describeError,
+  IpcError,
   journalEmptyTrash,
   journalPurge,
   journalRestore,
@@ -46,6 +47,7 @@ import {
   formatCardTime,
   parseBoundary,
 } from "../utils/date";
+import BackupDialog from "../components/BackupDialog.vue";
 import CodeDialog from "../components/CodeDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import Icon from "../components/Icon.vue";
@@ -266,11 +268,92 @@ async function importEntries() {
   });
 }
 
-async function backupData() {
+type BackupDialogMode = "create" | "restore";
+
+const backupDialog = ref<BackupDialogMode | null>(null);
+const backupPath = ref<string | null>(null);
+const backupBusy = ref(false);
+const backupDialogError = ref<string | null>(null);
+
+function isPasswordRequired(err: unknown): boolean {
+  return err instanceof IpcError && err.code === "password_required";
+}
+
+function backupDialogMessage(err: unknown): string {
+  if (err instanceof IpcError && err.code === "bad_password") {
+    return t("me.backupPwWrong");
+  }
+  return describeError(err);
+}
+
+function backupFileName(encrypted: boolean): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `Diary2Day-Backup-${stamp}.${encrypted ? "ddbak" : "zip"}`;
+}
+
+function openBackup() {
   if (opBusy.value) return;
+  backupPath.value = null;
+  backupDialogError.value = null;
+  backupDialog.value = "create";
+}
+
+function askRestorePassword(path: string) {
+  backupPath.value = path;
+  backupDialogError.value = null;
+  backupDialog.value = "restore";
+}
+
+function closeBackupDialog() {
+  if (backupBusy.value) return;
+  backupDialog.value = null;
+  backupPath.value = null;
+  backupDialogError.value = null;
+}
+
+async function restoreFrom(path: string, password?: string | null) {
+  const report = mobile.value
+    ? await dataRestoreAndroid(path, password)
+    : await dataRestore(path, password);
+  notice.value = t("me.restoreDone", { n: report.journals });
+  await Promise.all([session.load(), lock.load()]);
+  await Promise.all([loadInfo(), loadTrash()]);
+}
+
+async function submitBackup(password: string | null) {
+  if (backupBusy.value) return;
+  const mode = backupDialog.value;
+  if (!mode) return;
+  if (mode === "restore") {
+    const path = backupPath.value;
+    if (!path) {
+      closeBackupDialog();
+      return;
+    }
+    backupBusy.value = true;
+    backupDialogError.value = null;
+    await runOp(t("me.restore"), async () => {
+      try {
+        await restoreFrom(path, password);
+        backupDialog.value = null;
+        backupPath.value = null;
+      } catch (err) {
+        backupDialogError.value = isPasswordRequired(err)
+          ? t("me.backupPwRequired")
+          : backupDialogMessage(err);
+      }
+    });
+    backupBusy.value = false;
+    return;
+  }
+
+  backupDialog.value = null;
+  const encrypted = password !== null;
   if (mobile.value) {
     await runOp(t("me.backup"), async () => {
-      const report = await dataBackupAndroid();
+      const report = await dataBackupAndroid(password);
       if (!report) return;
       notice.value = t("me.backupDone", { size: formatBytes(report.size) });
     });
@@ -278,12 +361,12 @@ async function backupData() {
   }
   const target = await saveDialog({
     title: t("me.backup"),
-    defaultPath: "Diary2Day-Backup.zip",
-    filters: [{ name: "Diary2Day", extensions: ["zip"] }],
+    defaultPath: backupFileName(encrypted),
+    filters: [{ name: "Diary2Day", extensions: [encrypted ? "ddbak" : "zip"] }],
   });
   if (!target) return;
   await runOp(t("me.backup"), async () => {
-    const report = await dataBackup(target);
+    const report = await dataBackup(target, password);
     notice.value = t("me.backupDone", { size: formatBytes(report.size) });
   });
 }
@@ -303,7 +386,7 @@ async function pickRestore() {
   const source = await openDialog({
     multiple: false,
     title: t("me.restore"),
-    filters: [{ name: "Diary2Day", extensions: ["zip"] }],
+    filters: [{ name: "Diary2Day", extensions: ["zip", "ddbak"] }],
   });
   if (typeof source !== "string") return;
   pending.value = { kind: "restore", path: source };
@@ -367,10 +450,15 @@ async function runPending() {
   if (!action) return;
   if (action.kind === "restore") {
     await runOp(t("me.restore"), async () => {
-      const report = mobile.value ? await dataRestoreAndroid(action.path) : await dataRestore(action.path);
-      notice.value = t("me.restoreDone", { n: report.journals });
-      await Promise.all([session.load(), lock.load()]);
-      await Promise.all([loadInfo(), loadTrash()]);
+      try {
+        await restoreFrom(action.path);
+      } catch (err) {
+        if (isPasswordRequired(err)) {
+          askRestorePassword(action.path);
+          return;
+        }
+        throw err;
+      }
     });
     return;
   }
@@ -470,7 +558,7 @@ onBeforeUnmount(() => {
             class="row action-row"
             type="button"
             :disabled="opBusy"
-            @click="backupData"
+            @click="openBackup"
           >
             <span class="action-main">
               <span class="label">{{ t("me.backup") }}</span>
@@ -765,6 +853,15 @@ onBeforeUnmount(() => {
       danger
       @confirm="runPending"
       @cancel="pending = null"
+    />
+
+    <BackupDialog
+      :open="backupDialog !== null"
+      :mode="backupDialog === 'restore' ? 'restore' : 'create'"
+      :busy="backupBusy"
+      :error="backupDialogError"
+      @submit="submitBackup"
+      @cancel="closeBackupDialog"
     />
 
     <CodeDialog

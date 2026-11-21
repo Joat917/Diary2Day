@@ -199,12 +199,12 @@ export function dataImportMd(dir: string): Promise<ImportReport> {
   return call("data_import_md", { dir });
 }
 
-export function dataBackup(target: string): Promise<BackupReport> {
-  return call("data_backup", { target });
+export function dataBackup(target: string, password?: string | null): Promise<BackupReport> {
+  return call("data_backup", { target, password: password ?? null });
 }
 
-export function dataRestore(path: string): Promise<ImportReport> {
-  return call("data_restore", { path });
+export function dataRestore(path: string, password?: string | null): Promise<ImportReport> {
+  return call("data_restore", { path, password: password ?? null });
 }
 
 export function dataExportAndroid(): Promise<ExportReport | null> {
@@ -215,16 +215,19 @@ export function dataImportAndroid(): Promise<ImportReport | null> {
   return call("data_import_android");
 }
 
-export function dataBackupAndroid(): Promise<BackupReport | null> {
-  return call("data_backup_android");
+export function dataBackupAndroid(password?: string | null): Promise<BackupReport | null> {
+  return call("data_backup_android", { password: password ?? null });
 }
 
 export function dataPickRestoreAndroid(): Promise<PickedBackup | null> {
   return call("data_pick_restore_android");
 }
 
-export function dataRestoreAndroid(path: string): Promise<ImportReport> {
-  return call("data_restore_android", { path });
+export function dataRestoreAndroid(
+  path: string,
+  password?: string | null,
+): Promise<ImportReport> {
+  return call("data_restore_android", { path, password: password ?? null });
 }
 
 export function appLockStatus(): Promise<LockState> {

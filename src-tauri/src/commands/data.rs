@@ -29,16 +29,24 @@ pub async fn data_import_md(
 pub async fn data_backup(
     state: State<'_, AppState>,
     target: String,
+    password: Option<String>,
 ) -> Result<BackupReport, AppError> {
     let st = state.inner().clone();
-    run_blocking(st, move |state| export::backup(&state, &target)).await
+    run_blocking(st, move |state| {
+        export::backup(&state, &target, password.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn data_restore(
     state: State<'_, AppState>,
     path: String,
+    password: Option<String>,
 ) -> Result<ImportReport, AppError> {
     let st = state.inner().clone();
-    run_blocking(st, move |state| export::restore(&state, &path)).await
+    run_blocking(st, move |state| {
+        export::restore(&state, &path, password.as_deref())
+    })
+    .await
 }

@@ -1,3 +1,4 @@
+mod backup_crypt;
 mod commands;
 mod db;
 mod domain;

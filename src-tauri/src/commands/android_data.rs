@@ -167,16 +167,26 @@ pub async fn data_import_android(
 #[tauri::command]
 pub async fn data_backup_android(
     state: State<'_, AppState>,
+    password: Option<String>,
 ) -> Result<Option<BackupReport>, AppError> {
     let st = state.inner().clone();
     run_blocking(st, move |state| {
         let api = state.app.android_fs();
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let name = format!("Diary2Day-Backup-{stamp}.zip");
+        let encrypted = password.is_some();
+        let name = format!(
+            "Diary2Day-Backup-{stamp}.{}",
+            if encrypted { "ddbak" } else { "zip" }
+        );
+        let mime = if encrypted {
+            "application/octet-stream"
+        } else {
+            "application/zip"
+        };
 
         let Some(uri) = api
             .picker()
-            .save_file(None, &name, Some("application/zip"), false)
+            .save_file(None, &name, Some(mime), false)
             .map_err(|err| android_err("无法打开保存对话框", err))?
         else {
             return Ok(None);
@@ -184,18 +194,19 @@ pub async fn data_backup_android(
 
         let staging = staging_dir(&state, "backup-out")?;
         let target = staging.join(&name);
-        let result = export::backup(&state, &target.to_string_lossy()).and_then(|report| {
-            let mut input = fs::File::open(&target)?;
-            let mut out = api
-                .open_file_writable(&uri)
-                .map_err(|err| android_err("无法写入所选文件", err))?;
-            std::io::copy(&mut input, &mut out)?;
-            out.flush()?;
-            Ok(BackupReport {
-                path: api.get_name_or_last_path_segment(&uri),
-                size: report.size,
-            })
-        });
+        let result = export::backup(&state, &target.to_string_lossy(), password.as_deref())
+            .and_then(|report| {
+                let mut input = fs::File::open(&target)?;
+                let mut out = api
+                    .open_file_writable(&uri)
+                    .map_err(|err| android_err("无法写入所选文件", err))?;
+                std::io::copy(&mut input, &mut out)?;
+                out.flush()?;
+                Ok(BackupReport {
+                    path: api.get_name_or_last_path_segment(&uri),
+                    size: report.size,
+                })
+            });
         clear_staging(&state, "backup-out");
 
         Ok(Some(result?))
@@ -255,11 +266,12 @@ pub async fn data_pick_restore_android(
 pub async fn data_restore_android(
     state: State<'_, AppState>,
     path: String,
+    password: Option<String>,
 ) -> Result<ImportReport, AppError> {
     let st = state.inner().clone();
     run_blocking(st, move |state| {
-        let result = export::restore(&state, &path);
-        // 失败时保留暂存 zip，便于升级后重试；下次选择备份时统一清空。
+        let result = export::restore(&state, &path, password.as_deref());
+        // 失败时保留暂存备份包，便于升级后重试；下次选择备份时统一清空。
         if result.is_ok() {
             clear_staging(&state, "restore-pick");
         }

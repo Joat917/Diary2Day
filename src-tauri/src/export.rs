@@ -6,6 +6,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::Emitter;
 
+use crate::backup_crypt;
 use crate::db::{export as db_export, journal, tag};
 use crate::error::AppError;
 use crate::events::{self, OpProgress};
@@ -324,7 +325,21 @@ fn walk_files(dir: &Path, base: &Path, out: &mut Vec<(PathBuf, String)>) {
     }
 }
 
-pub fn backup(state: &AppState, target_path: &str) -> Result<BackupReport, AppError> {
+fn validate_password(password: &str) -> Result<(), AppError> {
+    if password.trim() != password {
+        return Err(AppError::new(
+            "backup_password_spaces",
+            "备份口令首尾不能有空格",
+        ));
+    }
+    Ok(())
+}
+
+pub fn backup(
+    state: &AppState,
+    target_path: &str,
+    password: Option<&str>,
+) -> Result<BackupReport, AppError> {
     let target = PathBuf::from(target_path);
     if target.as_os_str().is_empty() {
         return Err(AppError::new("bad_target", "请选择备份文件位置"));
@@ -332,6 +347,30 @@ pub fn backup(state: &AppState, target_path: &str) -> Result<BackupReport, AppEr
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
+    match password {
+        Some(password) => {
+            validate_password(password)?;
+            let backup_dir = state.paths.cache_dir.join("backup");
+            fs::create_dir_all(&backup_dir)?;
+            let payload = backup_dir.join("payload.zip");
+            if payload.exists() {
+                let _ = fs::remove_file(&payload);
+            }
+            write_backup_zip(state, &payload)?;
+            let result = backup_crypt::encrypt(&payload, &target, password);
+            let _ = fs::remove_file(&payload);
+            result?;
+        }
+        None => write_backup_zip(state, &target)?,
+    }
+    let size = fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0);
+    Ok(BackupReport {
+        path: target.to_string_lossy().into_owned(),
+        size,
+    })
+}
+
+fn write_backup_zip(state: &AppState, target: &Path) -> Result<(), AppError> {
     let backup_dir = state.paths.cache_dir.join("backup");
     fs::create_dir_all(&backup_dir)?;
     let snapshot = backup_dir.join("live.db");
@@ -361,7 +400,7 @@ pub fn backup(state: &AppState, target_path: &str) -> Result<BackupReport, AppEr
         "media_included": true,
     });
 
-    let file = fs::File::create(&target)?;
+    let file = fs::File::create(target)?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -384,20 +423,45 @@ pub fn backup(state: &AppState, target_path: &str) -> Result<BackupReport, AppEr
     }
     zip.finish()
         .map_err(|err| AppError::io(err.to_string()))?;
-
-    let size = fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0);
-    Ok(BackupReport {
-        path: target.to_string_lossy().into_owned(),
-        size,
-    })
+    Ok(())
 }
 
-pub fn restore(state: &AppState, zip_path: &str) -> Result<ImportReport, AppError> {
+pub fn restore(
+    state: &AppState,
+    zip_path: &str,
+    password: Option<&str>,
+) -> Result<ImportReport, AppError> {
     let source = PathBuf::from(zip_path);
     if !source.is_file() {
         return Err(AppError::new("bad_target", "备份文件不存在"));
     }
-    let file = fs::File::open(&source)?;
+    let decrypted = if backup_crypt::is_encrypted(&source)? {
+        let password = password.filter(|value| !value.is_empty()).ok_or_else(|| {
+            AppError::new("password_required", "这个备份已加密，请输入备份口令")
+        })?;
+        let decrypt_dir = state.paths.cache_dir.join("restore-decrypt");
+        if decrypt_dir.exists() {
+            fs::remove_dir_all(&decrypt_dir)?;
+        }
+        fs::create_dir_all(&decrypt_dir)?;
+        let plain = decrypt_dir.join("backup.zip");
+        if let Err(err) = backup_crypt::decrypt(&source, &plain, password) {
+            let _ = fs::remove_dir_all(&decrypt_dir);
+            return Err(err);
+        }
+        Some(plain)
+    } else {
+        None
+    };
+    let result = restore_zip(state, decrypted.as_deref().unwrap_or(&source));
+    if decrypted.is_some() {
+        let _ = fs::remove_dir_all(state.paths.cache_dir.join("restore-decrypt"));
+    }
+    result
+}
+
+fn restore_zip(state: &AppState, zip_path: &Path) -> Result<ImportReport, AppError> {
+    let file = fs::File::open(zip_path)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|err| AppError::io(err.to_string()))?;
 
