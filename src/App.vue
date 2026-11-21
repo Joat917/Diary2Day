@@ -1,13 +1,101 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { RouterLink, RouterView, useRoute } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { mdiAccountCircleOutline, mdiCalendarToday, mdiMagnify } from "@mdi/js";
 import { useBreakpoint } from "./composables/useBreakpoint";
 import { t, type MessageKey } from "./i18n";
+import { isTauri, shareDrain } from "./ipc/client";
+import { useLock } from "./stores/lock";
+import { useSession } from "./stores/session";
 import Icon from "./components/Icon.vue";
+import LockOverlay from "./components/LockOverlay.vue";
 
 const route = useRoute();
-const { isWide } = useBreakpoint();
+const router = useRouter();
+const { isWide, isThreePane } = useBreakpoint();
+const broad = computed(() => isThreePane.value && route.path.startsWith("/today"));
+const lock = useLock();
+const session = useSession();
+
+let lockTimer: number | undefined;
+let shareTimer: number | undefined;
+let unlistenLock: (() => void) | null = null;
+let shareBusy = false;
+
+async function drainShares() {
+  if (!isTauri() || shareBusy || lock.locked) return;
+  if (document.visibilityState === "hidden") return;
+  shareBusy = true;
+  try {
+    const report = await shareDrain();
+    if (report) await router.push(`/j/${report.id}`);
+  } catch {
+    // 锁定或暂时失败，等下次聚焦 / 解锁再试
+  } finally {
+    shareBusy = false;
+  }
+}
+
+function scheduleLock() {
+  window.clearTimeout(lockTimer);
+  if (!lock.enabled || lock.locked) return;
+  const delay = session.settings.lockLeaveDelayS;
+  if (delay <= 0) return;
+  lockTimer = window.setTimeout(() => {
+    void lock.engage();
+  }, delay * 1000);
+}
+
+function cancelLock() {
+  window.clearTimeout(lockTimer);
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === "hidden") {
+    scheduleLock();
+    return;
+  }
+  cancelLock();
+  void drainShares();
+}
+
+function onFocus() {
+  cancelLock();
+  void drainShares();
+}
+
+const viewEpoch = ref(0);
+// Locked startup must not mount views: their initial IPC calls are lock-gated.
+const viewsReady = ref(!lock.locked);
+
+watch(
+  () => lock.locked,
+  (locked, wasLocked) => {
+    if (!locked) viewsReady.value = true;
+    if (wasLocked && !locked) viewEpoch.value += 1;
+    if (!locked) void drainShares();
+  },
+);
+
+onMounted(async () => {
+  unlistenLock = await lock.listen();
+  window.addEventListener("blur", scheduleLock);
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  void drainShares();
+  if (/Android/i.test(navigator.userAgent)) {
+    shareTimer = window.setInterval(() => void drainShares(), 1500);
+  }
+});
+
+onBeforeUnmount(() => {
+  unlistenLock?.();
+  window.clearTimeout(lockTimer);
+  window.clearInterval(shareTimer);
+  window.removeEventListener("blur", scheduleLock);
+  window.removeEventListener("focus", onFocus);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+});
 
 const navItems: { to: string; label: MessageKey; icon: string }[] = [
   { to: "/today", label: "nav.today", icon: mdiCalendarToday },
@@ -36,13 +124,13 @@ const activeIndex = computed(() =>
           <span>{{ t(item.label) }}</span>
         </RouterLink>
       </nav>
-      <div class="rail-foot">M0 · 0.1.0</div>
+      <div class="rail-foot">M2 · 0.1.0</div>
     </aside>
 
-    <main class="content">
+    <main class="content" :class="{ broad }">
       <RouterView v-slot="{ Component }">
         <Transition name="view" mode="out-in">
-          <component :is="Component" />
+          <component v-if="viewsReady" :is="Component" :key="viewEpoch" />
         </Transition>
       </RouterView>
     </main>
@@ -65,6 +153,8 @@ const activeIndex = computed(() =>
         <span>{{ t(item.label) }}</span>
       </RouterLink>
     </nav>
+
+    <LockOverlay />
   </div>
 </template>
 
@@ -142,6 +232,10 @@ const activeIndex = computed(() =>
 
 .app:not(.wide) .content {
   max-width: none;
+}
+
+.content.broad {
+  max-width: 1440px;
 }
 
 .view-enter-active,

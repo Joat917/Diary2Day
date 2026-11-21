@@ -1,17 +1,34 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { mdiChevronDown, mdiFolderOpenOutline, mdiRestore, mdiTrashCanOutline } from "@mdi/js";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
+  mdiChevronDown,
+  mdiCloudDownloadOutline,
+  mdiCloudUploadOutline,
+  mdiFileExportOutline,
+  mdiFileImportOutline,
+  mdiFolderOpenOutline,
+  mdiRestore,
+  mdiTrashCanOutline,
+} from "@mdi/js";
+import {
+  dataBackup,
+  dataExportDir,
+  dataImportMd,
   dataInfo,
+  dataRestore,
+  describeError,
   journalEmptyTrash,
   journalPurge,
   journalRestore,
   journalTrashList,
   onDataChanged,
+  onOpProgress,
   openDataDir,
 } from "../ipc/client";
-import type { DataInfo, JournalSummary, Theme } from "../ipc/types";
+import type { DataInfo, JournalSummary, OpProgress, Theme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
+import { useLock } from "../stores/lock";
 import { useSession } from "../stores/session";
 import {
   formatBoundary,
@@ -19,15 +36,18 @@ import {
   formatCardDate,
   parseBoundary,
 } from "../utils/date";
+import CodeDialog from "../components/CodeDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import Icon from "../components/Icon.vue";
 import StateBlock from "../components/StateBlock.vue";
 
 const session = useSession();
+const lock = useLock();
 const info = ref<DataInfo | null>(null);
 const trash = ref<JournalSummary[]>([]);
 const trashLoading = ref(true);
-const failure = ref(false);
+const trashError = ref<string | null>(null);
+const failure = ref<string | null>(null);
 
 const themes: Theme[] = ["system", "light", "dark"];
 
@@ -41,18 +61,21 @@ const weekdayOptions = computed(() =>
 async function loadInfo() {
   try {
     info.value = await dataInfo();
-  } catch {
-    failure.value = true;
+    failure.value = null;
+  } catch (err) {
+    failure.value = describeError(err);
   }
 }
 
 async function loadTrash() {
   trashLoading.value = true;
+  trashError.value = null;
   try {
     const page = await journalTrashList(50);
     trash.value = page.items;
-  } catch {
+  } catch (err) {
     trash.value = [];
+    trashError.value = describeError(err);
   } finally {
     trashLoading.value = false;
   }
@@ -97,31 +120,166 @@ async function toggleReduceMotion() {
 async function openFolder() {
   try {
     await openDataDir();
-  } catch {
-    failure.value = true;
+  } catch (err) {
+    failure.value = describeError(err);
   }
 }
 
 async function restoreEntry(id: string) {
-  await journalRestore(id);
-  await Promise.all([loadInfo(), loadTrash()]);
+  opError.value = null;
+  try {
+    await journalRestore(id);
+    await Promise.all([loadInfo(), loadTrash()]);
+  } catch (err) {
+    opError.value = describeError(err);
+  }
 }
 
-type PendingAction = { kind: "purge"; id: string } | { kind: "empty" };
+type PendingAction =
+  | { kind: "purge"; id: string }
+  | { kind: "empty" }
+  | { kind: "restore"; path: string };
 
 const pending = ref<PendingAction | null>(null);
 
-const confirmTitle = computed(() =>
-  pending.value?.kind === "empty" ? t("me.emptyTrashTitle") : t("me.purgeTitle"),
-);
+const confirmTitle = computed(() => {
+  if (pending.value?.kind === "empty") return t("me.emptyTrashTitle");
+  if (pending.value?.kind === "restore") return t("me.restore");
+  return t("me.purgeTitle");
+});
 
-const confirmMessage = computed(() =>
-  pending.value?.kind === "empty" ? t("me.emptyTrashConfirm") : t("me.purgeConfirm"),
-);
+const confirmMessage = computed(() => {
+  if (pending.value?.kind === "empty") return t("me.emptyTrashConfirm");
+  if (pending.value?.kind === "restore") return t("me.restoreConfirm");
+  return t("me.purgeConfirm");
+});
 
-const confirmLabel = computed(() =>
-  pending.value?.kind === "empty" ? t("me.emptyTrash") : t("common.purge"),
-);
+const confirmLabel = computed(() => {
+  if (pending.value?.kind === "empty") return t("me.emptyTrash");
+  if (pending.value?.kind === "restore") return t("me.restore");
+  return t("common.purge");
+});
+
+const opBusy = ref(false);
+const opLabel = ref<string | null>(null);
+const progress = ref<OpProgress | null>(null);
+const notice = ref<string | null>(null);
+const opError = ref<string | null>(null);
+
+async function runOp(label: string, task: () => Promise<void>) {
+  if (opBusy.value) return;
+  opBusy.value = true;
+  opLabel.value = label;
+  progress.value = null;
+  notice.value = null;
+  opError.value = null;
+  try {
+    await task();
+  } catch (err) {
+    opError.value = describeError(err);
+  } finally {
+    opBusy.value = false;
+    opLabel.value = null;
+    progress.value = null;
+  }
+}
+
+async function exportEntries() {
+  if (opBusy.value) return;
+  const target = await openDialog({
+    directory: true,
+    multiple: false,
+    title: t("me.export"),
+  });
+  if (typeof target !== "string") return;
+  await runOp(t("me.export"), async () => {
+    const report = await dataExportDir(target);
+    notice.value = t("me.exportDone", { n: report.journals, dir: report.dir });
+  });
+}
+
+async function importEntries() {
+  if (opBusy.value) return;
+  const source = await openDialog({
+    directory: true,
+    multiple: false,
+    title: t("me.import"),
+  });
+  if (typeof source !== "string") return;
+  await runOp(t("me.import"), async () => {
+    const report = await dataImportMd(source);
+    notice.value = t("me.importDone", { n: report.journals });
+    await Promise.all([loadInfo(), loadTrash()]);
+  });
+}
+
+async function backupData() {
+  if (opBusy.value) return;
+  const target = await saveDialog({
+    title: t("me.backup"),
+    defaultPath: "Diary2Day-Backup.zip",
+    filters: [{ name: "Diary2Day", extensions: ["zip"] }],
+  });
+  if (!target) return;
+  await runOp(t("me.backup"), async () => {
+    const report = await dataBackup(target);
+    notice.value = t("me.backupDone", { size: formatBytes(report.size) });
+  });
+}
+
+async function pickRestore() {
+  if (opBusy.value) return;
+  const source = await openDialog({
+    multiple: false,
+    title: t("me.restore"),
+    filters: [{ name: "Diary2Day", extensions: ["zip"] }],
+  });
+  if (typeof source !== "string") return;
+  pending.value = { kind: "restore", path: source };
+}
+
+type LockDialogState = "set" | "disable" | null;
+
+const lockDialog = ref<LockDialogState>(null);
+const lockBusy = ref(false);
+const lockError = ref<string | null>(null);
+
+function openLockSet() {
+  lockError.value = null;
+  lockDialog.value = "set";
+}
+
+function openLockDisable() {
+  lockError.value = null;
+  lockDialog.value = "disable";
+}
+
+async function submitLockCode(code: string) {
+  if (lockBusy.value) return;
+  lockBusy.value = true;
+  lockError.value = null;
+  try {
+    if (lockDialog.value === "set") await lock.setCode(code);
+    else await lock.clear(code);
+    lockDialog.value = null;
+  } catch (err) {
+    lockError.value = describeError(err);
+  } finally {
+    lockBusy.value = false;
+  }
+}
+
+const lockDelays = [0, 30, 60, 300, 600];
+
+function lockDelayLabel(seconds: number): string {
+  if (seconds <= 0) return t("me.lockDelayOff");
+  if (seconds < 60) return t("me.lockDelaySeconds", { n: seconds });
+  return t("me.lockDelayMinutes", { n: Math.round(seconds / 60) });
+}
+
+async function setLockDelay(value: number) {
+  await session.patch({ lockLeaveDelayS: value });
+}
 
 function purgeEntry(id: string) {
   pending.value = { kind: "purge", id };
@@ -136,12 +294,27 @@ async function runPending() {
   const action = pending.value;
   pending.value = null;
   if (!action) return;
-  if (action.kind === "empty") await journalEmptyTrash();
-  else await journalPurge(action.id);
-  await Promise.all([loadInfo(), loadTrash()]);
+  if (action.kind === "restore") {
+    await runOp(t("me.restore"), async () => {
+      const report = await dataRestore(action.path);
+      notice.value = t("me.restoreDone", { n: report.journals });
+      await Promise.all([session.load(), lock.load()]);
+      await Promise.all([loadInfo(), loadTrash()]);
+    });
+    return;
+  }
+  opError.value = null;
+  try {
+    if (action.kind === "empty") await journalEmptyTrash();
+    else await journalPurge(action.id);
+    await Promise.all([loadInfo(), loadTrash()]);
+  } catch (err) {
+    opError.value = describeError(err);
+  }
 }
 
 let unlisten: (() => void) | null = null;
+let unlistenProgress: (() => void) | null = null;
 
 onMounted(async () => {
   await Promise.all([loadInfo(), loadTrash()]);
@@ -149,9 +322,15 @@ onMounted(async () => {
     void loadInfo();
     void loadTrash();
   });
+  unlistenProgress = await onOpProgress((payload) => {
+    progress.value = payload;
+  });
 });
 
-onBeforeUnmount(() => unlisten?.());
+onBeforeUnmount(() => {
+  unlisten?.();
+  unlistenProgress?.();
+});
 </script>
 
 <template>
@@ -283,6 +462,49 @@ onBeforeUnmount(() => unlisten?.());
       </section>
 
       <section class="group">
+        <h2 class="group-title">{{ t("me.lock") }}</h2>
+        <div class="rows">
+          <div class="row">
+            <div class="row-main">
+              <span class="label">{{ t("me.lock") }}</span>
+              <span class="sub">{{ t("me.lockHint") }}</span>
+            </div>
+            <button
+              v-if="!lock.enabled"
+              class="text-btn"
+              type="button"
+              @click="openLockSet"
+            >
+              {{ t("me.lockEnable") }}
+            </button>
+            <button
+              v-else
+              class="text-btn danger"
+              type="button"
+              @click="openLockDisable"
+            >
+              {{ t("me.lockDisable") }}
+            </button>
+          </div>
+          <div v-if="lock.enabled" class="row">
+            <span class="label">{{ t("me.lockDelay") }}</span>
+            <span class="select-wrap">
+              <select
+                class="select"
+                :value="session.settings.lockLeaveDelayS"
+                @change="setLockDelay(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="value in lockDelays" :key="value" :value="value">
+                  {{ lockDelayLabel(value) }}
+                </option>
+              </select>
+              <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="group">
         <h2 class="group-title">{{ t("me.data") }}</h2>
         <div class="rows">
           <div class="row stack">
@@ -310,6 +532,69 @@ onBeforeUnmount(() => unlisten?.());
               {{ t("me.openDataDir") }}
             </button>
           </div>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="exportEntries"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.export") }}</span>
+              <span class="sub">{{ t("me.exportHint") }}</span>
+            </span>
+            <Icon :path="mdiFileExportOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="importEntries"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.import") }}</span>
+            </span>
+            <Icon :path="mdiFileImportOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="backupData"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.backup") }}</span>
+              <span class="sub">{{ t("me.backupHint") }}</span>
+            </span>
+            <Icon :path="mdiCloudUploadOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="pickRestore"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.restore") }}</span>
+            </span>
+            <Icon :path="mdiCloudDownloadOutline" :size="20" />
+          </button>
+          <div v-if="opBusy" class="row">
+            <span class="label">{{ opLabel }}</span>
+            <span class="value">
+              {{
+                progress && progress.total > 0
+                  ? t("me.progress", { done: progress.done, total: progress.total })
+                  : "…"
+              }}
+            </span>
+          </div>
+          <div v-else-if="opError" class="row">
+            <span class="label">{{ t("me.opFailed") }}</span>
+            <span class="value warn">{{ opError }}</span>
+          </div>
+          <div v-else-if="notice" class="row">
+            <span class="value notice">{{ notice }}</span>
+          </div>
         </div>
       </section>
 
@@ -326,6 +611,14 @@ onBeforeUnmount(() => unlisten?.());
           </button>
         </div>
         <StateBlock v-if="trashLoading" kind="loading" />
+        <StateBlock
+          v-else-if="trashError"
+          kind="error"
+          :title="t('common.error')"
+          :hint="trashError ?? undefined"
+          :action-label="t('common.retry')"
+          @action="loadTrash"
+        />
         <StateBlock v-else-if="!trash.length" kind="empty" :title="t('me.trashEmpty')" />
         <div v-else class="trash-list">
           <div v-for="item in trash" :key="item.id" class="trash-item">
@@ -369,13 +662,11 @@ onBeforeUnmount(() => unlisten?.());
           <div class="row">
             <span class="value">{{ t("me.version") }}</span>
           </div>
-          <div class="row">
-            <span class="value muted">{{ t("me.exportSoon") }}</span>
-          </div>
           <StateBlock
             v-if="failure"
             kind="error"
             :title="t('common.error')"
+            :hint="failure ?? undefined"
             :action-label="t('common.retry')"
             @action="loadInfo"
           />
@@ -391,6 +682,18 @@ onBeforeUnmount(() => unlisten?.());
       danger
       @confirm="runPending"
       @cancel="pending = null"
+    />
+
+    <CodeDialog
+      :open="lockDialog !== null"
+      :title="lockDialog === 'disable' ? t('me.lockDisableTitle') : t('me.lockSetTitle')"
+      :hint="lockDialog === 'disable' ? t('me.lockDisableHint') : t('me.lockSetHint')"
+      :confirm-label="lockDialog === 'disable' ? t('me.lockDisable') : t('me.lockEnable')"
+      :needs-confirm="lockDialog === 'set'"
+      :busy="lockBusy"
+      :error="lockError"
+      @submit="submitLockCode"
+      @cancel="lockDialog = null"
     />
   </div>
 </template>
@@ -603,6 +906,43 @@ html[dir="rtl"] .switch.on .knob {
   color: var(--c-primary);
   font-size: var(--t-small);
   min-height: 36px;
+}
+
+.action-row {
+  width: 100%;
+  background: transparent;
+  text-align: start;
+  color: var(--c-on-surface-muted);
+  cursor: pointer;
+  transition: background var(--m-1) var(--ease);
+}
+
+.action-row:hover:not(:disabled) {
+  background: var(--c-surface-2);
+}
+
+.action-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.action-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.value.warn {
+  color: var(--c-danger);
+  max-width: 60%;
+  text-align: end;
+  word-break: break-word;
+}
+
+.value.notice {
+  color: var(--c-primary);
+  word-break: break-word;
 }
 
 .text-btn.danger {

@@ -54,6 +54,28 @@ pub fn create(conn: &Connection, name: &str) -> Result<Tag, AppError> {
     })
 }
 
+pub fn ensure(conn: &Connection, name: &str) -> Result<Tag, AppError> {
+    match create(conn, name) {
+        Ok(tag) => Ok(tag),
+        Err(err) if err.code == "tag_exists" => {
+            let key = name_key::fold(name.trim());
+            conn.query_row(
+                "SELECT id, name, 0 FROM tag WHERE name_key = ?1",
+                [key],
+                |row| {
+                    Ok(Tag {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        usage: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(AppError::from)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<(), AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {

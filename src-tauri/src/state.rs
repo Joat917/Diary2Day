@@ -18,11 +18,38 @@ pub struct AppPaths {
     pub cache_dir: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct LockRuntime {
+    pub enabled: bool,
+    pub salt: String,
+    pub hash: String,
+    pub locked: bool,
+}
+
+impl LockRuntime {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            salt: String::new(),
+            hash: String::new(),
+            locked: false,
+        }
+    }
+
+    pub fn snapshot(&self) -> crate::db::lock::LockState {
+        crate::db::lock::LockState {
+            enabled: self.enabled,
+            locked: self.enabled && self.locked,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub paths: AppPaths,
     pub app: AppHandle,
+    pub lock: Arc<Mutex<LockRuntime>>,
 }
 
 impl AppState {
@@ -40,6 +67,16 @@ impl AppState {
         let mut conn = crate::db::conn::open(&db_path)?;
         crate::db::migrate::run(&mut conn)?;
 
+        let lock = match crate::db::lock::load(&conn)? {
+            Some(row) => LockRuntime {
+                enabled: true,
+                salt: row.salt,
+                hash: row.hash,
+                locked: true,
+            },
+            None => LockRuntime::disabled(),
+        };
+
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
             paths: AppPaths {
@@ -49,7 +86,31 @@ impl AppState {
                 cache_dir,
             },
             app: app.clone(),
+            lock: Arc::new(Mutex::new(lock)),
         })
+    }
+
+    pub fn lock_state(&self) -> crate::db::lock::LockState {
+        self.lock
+            .lock()
+            .map(|state| state.snapshot())
+            .unwrap_or(crate::db::lock::LockState {
+                enabled: true,
+                locked: true,
+            })
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.lock
+            .lock()
+            .map(|state| state.enabled && state.locked)
+            .unwrap_or(true)
+    }
+
+    pub fn update_lock(&self, next: LockRuntime) {
+        if let Ok(mut state) = self.lock.lock() {
+            *state = next;
+        }
     }
 
     pub fn with_db<T>(

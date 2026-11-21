@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { mdiCalendarMonthOutline, mdiCrosshairsGps, mdiPlus } from "@mdi/js";
-import { journalList, onDataChanged } from "../ipc/client";
+import {
+  mdiCalendarMonthOutline,
+  mdiCrosshairsGps,
+  mdiPencil,
+  mdiPlus,
+} from "@mdi/js";
+import { describeError, journalList, onDataChanged } from "../ipc/client";
 import type { JournalSummary } from "../ipc/types";
 import { t } from "../i18n";
 import { useBreakpoint } from "../composables/useBreakpoint";
 import { useSession } from "../stores/session";
 import { diaryToday, formatDayTitle, greetingKey } from "../utils/date";
+import DetailView from "./DetailView.vue";
 import Icon from "../components/Icon.vue";
 import JournalCard from "../components/JournalCard.vue";
 import MiniCalendar from "../components/MiniCalendar.vue";
@@ -18,7 +24,7 @@ import WeekStrip from "../components/WeekStrip.vue";
 const route = useRoute();
 const router = useRouter();
 const session = useSession();
-const { isWide } = useBreakpoint();
+const { isWide, isThreePane } = useBreakpoint();
 const sheetOpen = ref(false);
 
 const today = computed(() => diaryToday(session.settings.dayBoundaryMinutes));
@@ -31,7 +37,7 @@ const isToday = computed(() => selected.value === today.value);
 const items = ref<JournalSummary[]>([]);
 const nextCursor = ref<string | null>(null);
 const loading = ref(true);
-const error = ref(false);
+const error = ref<string | null>(null);
 const version = ref(0);
 const listDir = ref<"next" | "prev">("next");
 const loadedDay = ref("");
@@ -47,15 +53,15 @@ async function load() {
     nextCursor.value = null;
   }
   loading.value = true;
-  error.value = false;
+  error.value = null;
   try {
     const page = await journalList({ dayKey: day, limit: 50 });
     if (token !== loadToken) return;
     items.value = page.items;
     nextCursor.value = page.next_cursor;
     loadedDay.value = day;
-  } catch {
-    if (token === loadToken) error.value = true;
+  } catch (err) {
+    if (token === loadToken) error.value = describeError(err);
   } finally {
     if (token === loadToken) loading.value = false;
   }
@@ -71,8 +77,8 @@ async function loadMore() {
     });
     items.value = [...items.value, ...page.items];
     nextCursor.value = page.next_cursor;
-  } catch {
-    error.value = true;
+  } catch (err) {
+    error.value = describeError(err);
   }
 }
 
@@ -90,8 +96,25 @@ function selectDay(dayKey: string) {
   void router.replace({ path: "/today", query: { d: dayKey } });
 }
 
+const openedId = computed(() => {
+  const value = route.query.e;
+  return typeof value === "string" && value ? value : null;
+});
+
 function openEntry(id: string) {
-  void router.push(`/j/${id}`);
+  if (!isThreePane.value) {
+    void router.push(`/j/${id}`);
+    return;
+  }
+  void router.replace({ path: "/today", query: { ...route.query, e: id } });
+}
+
+function closeEntry() {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(route.query)) {
+    if (key !== "e" && typeof value === "string") query[key] = value;
+  }
+  void router.replace({ path: "/today", query });
 }
 
 const creating = ref(false);
@@ -152,7 +175,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="view" :class="{ wide: isWide }">
+  <div class="view" :class="{ wide: isWide, three: isThreePane }">
     <aside v-if="isWide" class="cal-col">
       <MiniCalendar
         :selected="selected"
@@ -215,6 +238,7 @@ onBeforeUnmount(() => {
                 v-else-if="error"
                 kind="error"
                 :title="t('common.error')"
+                :hint="error ?? undefined"
                 :action-label="t('common.retry')"
                 @action="load"
               />
@@ -225,6 +249,7 @@ onBeforeUnmount(() => {
                     v-for="item in items"
                     :key="item.id"
                     :item="item"
+                    :active="item.id === openedId"
                     @open="openEntry"
                   />
                 </TransitionGroup>
@@ -244,6 +269,21 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <aside v-if="isThreePane" class="detail-col">
+      <Transition name="detail-panel" mode="out-in">
+        <DetailView
+          v-if="openedId"
+          :key="openedId"
+          :entry-id="openedId"
+          @close="closeEntry"
+        />
+        <div v-else key="empty" class="detail-empty">
+          <Icon :path="mdiPencil" :size="24" />
+          <p>{{ t("today.pickEntry") }}</p>
+        </div>
+      </Transition>
+    </aside>
 
     <button
       v-if="!isWide"
@@ -287,6 +327,44 @@ onBeforeUnmount(() => {
 .view.wide {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.view.three {
+  grid-template-columns: 240px minmax(300px, 1fr) minmax(420px, 1fr);
+}
+
+.detail-col {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-inline-start: 1px solid var(--c-hairline);
+  background: var(--c-surface-1);
+}
+
+.detail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: 100%;
+  padding: var(--s-6);
+  color: var(--c-on-surface-faint);
+  font-size: var(--t-small);
+  text-align: center;
+}
+
+.detail-panel-enter-active,
+.detail-panel-leave-active {
+  transition:
+    opacity var(--m-2) var(--ease),
+    transform var(--m-2) var(--ease);
+}
+
+.detail-panel-enter-from,
+.detail-panel-leave-to {
+  opacity: 0;
+  transform: translateX(12px);
 }
 
 .cal-col {

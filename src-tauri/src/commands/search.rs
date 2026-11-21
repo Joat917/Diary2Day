@@ -13,6 +13,8 @@ pub async fn search_query(
     text: String,
     from: Option<String>,
     to: Option<String>,
+    tag_id: Option<String>,
+    mood: Option<String>,
     limit: Option<i64>,
 ) -> Result<SearchPage, AppError> {
     let st = state.inner().clone();
@@ -24,6 +26,8 @@ pub async fn search_query(
                     text,
                     from,
                     to,
+                    tag_id,
+                    mood,
                     limit: limit.unwrap_or(50),
                 },
             )

@@ -83,6 +83,12 @@ defineEmits<{ action: [] }>();
   color: var(--c-on-surface-muted);
 }
 
+.error .hint {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .action {
   margin-top: var(--s-3);
   align-self: center;

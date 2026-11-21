@@ -32,6 +32,8 @@ export interface JournalSummary {
   day_key: string;
   words: number;
   asset_n: number;
+  audio_n: number;
+  video_n: number;
   cover_asset: string | null;
   pinned: boolean;
   sensitive: boolean;
@@ -71,6 +73,10 @@ export interface Counts {
   words: number;
 }
 
+export interface AssetPaths {
+  assets_dir: string;
+}
+
 export interface DataInfo {
   db_path: string | null;
   data_dir: string;
@@ -84,4 +90,54 @@ export interface DataChanged {
   kind: "journal" | "tag" | "all";
   id?: string;
   day_key?: string;
+}
+
+export type AssetKind = "image" | "audio" | "video";
+
+export interface Asset {
+  name: string;
+  kind: AssetKind;
+  ext: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+}
+
+export interface ImportFile {
+  origName: string;
+  data: string;
+}
+
+export interface ExportReport {
+  dir: string;
+  journals: number;
+  assets: number;
+}
+
+export interface ImportReport {
+  journals: number;
+  assets: number;
+}
+
+export interface BackupReport {
+  path: string;
+  size: number;
+}
+
+export interface ShareReport {
+  id: string;
+  dayKey: string;
+  assets: number;
+}
+
+export interface LockState {
+  enabled: boolean;
+  locked: boolean;
+}
+
+export interface OpProgress {
+  opId: string;
+  phase: string;
+  done: number;
+  total: number;
 }

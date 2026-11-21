@@ -3,6 +3,9 @@ mod db;
 mod domain;
 mod error;
 mod events;
+mod export;
+mod fs;
+mod share;
 mod state;
 
 use tauri::Manager;
@@ -11,8 +14,11 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = state::AppState::init(app.handle())?;
+            app.asset_protocol_scope()
+                .allow_directory(&state.paths.assets_dir, true)?;
             app.manage(state);
             Ok(())
         })
@@ -37,7 +43,20 @@ pub fn run() {
             commands::settings::settings_get_all,
             commands::settings::settings_patch,
             commands::app::data_info,
+            commands::app::asset_paths,
             commands::app::app_open_data_dir,
+            commands::media::media_import,
+            commands::media::asset_gc,
+            commands::data::data_export_dir,
+            commands::data::data_import_md,
+            commands::data::data_backup,
+            commands::data::data_restore,
+            commands::lock::app_lock_status,
+            commands::lock::app_lock_set,
+            commands::lock::app_lock_clear,
+            commands::lock::app_lock_unlock,
+            commands::lock::app_lock_engage,
+            commands::share::share_drain,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

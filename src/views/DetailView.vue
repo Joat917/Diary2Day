@@ -4,12 +4,15 @@ import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import Vditor from "vditor";
 import {
   mdiArrowLeft,
+  mdiClose,
   mdiPencil,
   mdiPin,
   mdiPinOutline,
   mdiTrashCanOutline,
 } from "@mdi/js";
 import {
+  assetGc,
+  describeError,
   IpcError,
   journalDelete,
   journalGet,
@@ -22,11 +25,16 @@ import { useBreakpoint } from "../composables/useBreakpoint";
 import { useAutosave } from "../composables/useAutosave";
 import { useSession } from "../stores/session";
 import { diaryToday, formatRecordedAt, recordedAtNow } from "../utils/date";
+import { expandAssetUrls, isAssetSrc, referencedAssetNames } from "../utils/assetUrl";
+import AssetViewer from "../components/AssetViewer.vue";
 import EditorPane from "../components/EditorPane.vue";
 import Icon from "../components/Icon.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import MetaChips from "../components/MetaChips.vue";
 import StateBlock from "../components/StateBlock.vue";
+
+const props = defineProps<{ entryId?: string | null }>();
+const emit = defineEmits<{ close: [] }>();
 
 const route = useRoute();
 const router = useRouter();
@@ -37,17 +45,38 @@ const journal = ref<Journal | null>(null);
 const content = ref("");
 const loading = ref(true);
 const missing = ref(false);
-const failed = ref(false);
+const failReason = ref<string | null>(null);
+const saveError = ref<string | null>(null);
 const editing = ref(false);
 const previewEl = ref<HTMLElement | null>(null);
 const editorPane = ref<InstanceType<typeof EditorPane> | null>(null);
+const viewerSrc = ref<string | null>(null);
 
-const entryId = computed(() => String(route.params.id ?? ""));
+const embedded = computed(() => props.entryId != null);
+const entryId = computed(() => props.entryId ?? String(route.params.id ?? ""));
 const metaSaving = ref(false);
 const deleteOpen = ref(false);
 const pendingFocus = ref(false);
 let skipLoadId = "";
 let leaving = false;
+const sessionAssets = new Set<string>();
+let loadedAssets: string[] = [];
+
+function onAssetsImported(names: string[]) {
+  for (const name of names) sessionAssets.add(name);
+}
+
+function gcDetachedAssets() {
+  if (readOnly.value) return;
+  const keep = new Set(referencedAssetNames(content.value));
+  const candidates = [...new Set([...loadedAssets, ...sessionAssets])].filter(
+    (name) => !keep.has(name),
+  );
+  if (!candidates.length) return;
+  void assetGc(candidates).catch((err) => {
+    console.error("[assets] cleanup failed", err);
+  });
+}
 
 const readOnly = computed(() => {
   const item = journal.value;
@@ -56,6 +85,16 @@ const readOnly = computed(() => {
 });
 
 async function persist(value: string) {
+  try {
+    await writeJournal(value);
+    saveError.value = null;
+  } catch (err) {
+    saveError.value = describeError(err);
+    throw err;
+  }
+}
+
+async function writeJournal(value: string) {
   if (readOnly.value) return;
   const item = journal.value;
   if (!item) {
@@ -68,7 +107,7 @@ async function persist(value: string) {
     });
     journal.value = saved;
     skipLoadId = saved.id;
-    if (!leaving) {
+    if (!leaving && !embedded.value) {
       await router.replace({ path: `/j/${saved.id}`, query: { edit: "1" } });
     }
     return;
@@ -153,6 +192,12 @@ function isDark(): boolean {
   return document.documentElement.dataset.theme === "dark";
 }
 
+function onPreviewClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  const image = target?.closest("img") as HTMLImageElement | null;
+  if (image && isAssetSrc(image.src)) viewerSrc.value = image.src;
+}
+
 function renderPreview() {
   const element = previewEl.value;
   if (!element) return;
@@ -160,7 +205,7 @@ function renderPreview() {
   if (!content.value.trim()) return;
   const dark = isDark();
   element.classList.add("vditor-reset");
-  Vditor.preview(element as HTMLDivElement, content.value, {
+  Vditor.preview(element as HTMLDivElement, expandAssetUrls(content.value), {
     cdn: "/vditor",
     mode: dark ? "dark" : "light",
     theme: { current: dark ? "dark" : "light", path: "/vditor/dist/css/content-theme" },
@@ -168,17 +213,20 @@ function renderPreview() {
     anchor: 0,
     ...(session.settings.imageLazy ? { lazyLoadImage: "lazy" } : {}),
   });
-  requestAnimationFrame(highlightQuery);
+  requestAnimationFrame(() => {
+    applyHighlight(queryText());
+  });
 }
 
 function queryText(): string {
+  if (embedded.value) return "";
   const value = route.query.q;
   return typeof value === "string" ? value.trim() : "";
 }
 
-function highlightQuery() {
+function applyHighlight(needleRaw: string) {
   const rootEl = previewEl.value;
-  const needle = queryText();
+  const needle = needleRaw.trim();
   if (!rootEl || !needle) return;
   const target = needle.toLowerCase();
   const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
@@ -194,34 +242,30 @@ function highlightQuery() {
   while (walker.nextNode()) nodes.push(walker.currentNode as Text);
 
   let first: HTMLElement | null = null;
-  let total = 0;
+  let count = 0;
   for (const node of nodes) {
-    if (total >= 200) break;
+    if (count >= 200) break;
     const value = node.nodeValue ?? "";
     const lower = value.toLowerCase();
     if (!lower.includes(target)) continue;
     const fragment = document.createDocumentFragment();
     let start = 0;
     let index = lower.indexOf(target);
-    while (index !== -1 && total < 200) {
+    while (index !== -1 && count < 200) {
       if (index > start) fragment.append(value.slice(start, index));
       const mark = document.createElement("mark");
-      mark.className = total === 0 ? "dd-hit current" : "dd-hit";
+      mark.className = "dd-hit";
       mark.textContent = value.slice(index, index + target.length);
       fragment.append(mark);
       first ??= mark;
-      total += 1;
+      count += 1;
       start = index + target.length;
       index = lower.indexOf(target, start);
     }
     if (start < value.length) fragment.append(value.slice(start));
     node.parentNode?.replaceChild(fragment, node);
   }
-  if (first) {
-    requestAnimationFrame(() => {
-      first?.scrollIntoView({ block: "center", behavior: "smooth" });
-    });
-  }
+  first?.scrollIntoView({ block: "center" });
 }
 
 async function load() {
@@ -230,8 +274,9 @@ async function load() {
   if (id === "new") {
     journal.value = null;
     content.value = "";
+    loadedAssets = [];
     missing.value = false;
-    failed.value = false;
+    failReason.value = null;
     loading.value = false;
     editing.value = true;
     await nextTick();
@@ -241,13 +286,15 @@ async function load() {
   }
   loading.value = true;
   missing.value = false;
-  failed.value = false;
+  failReason.value = null;
   try {
     const item = await journalGet(id);
     journal.value = item;
     content.value = item.content;
+    loadedAssets = referencedAssetNames(item.content);
     const locked = item.day_key < diaryToday(session.settings.dayBoundaryMinutes);
-    editing.value = !locked && (route.query.edit === "1" || !queryText());
+    editing.value =
+      !locked && (embedded.value || route.query.edit === "1" || !queryText());
     await nextTick();
     if (editing.value) {
       pendingFocus.value = true;
@@ -259,7 +306,7 @@ async function load() {
     if (error instanceof IpcError && error.code === "journal_not_found") {
       missing.value = true;
     } else {
-      failed.value = true;
+      failReason.value = describeError(error);
     }
   } finally {
     loading.value = false;
@@ -281,7 +328,12 @@ watch(
       return;
     }
     skipLoadId = "";
-    if (previous) await flushSave();
+    if (previous) {
+      await flushSave();
+      gcDetachedAssets();
+    }
+    sessionAssets.clear();
+    loadedAssets = [];
     content.value = "";
     await load();
   },
@@ -323,27 +375,23 @@ async function confirmRemove() {
   try {
     await journalDelete(item.id);
     goBack();
-  } catch {
-    failed.value = true;
+  } catch (err) {
+    failReason.value = describeError(err);
   }
+}
+
+async function requestClose() {
+  await flushSave();
+  emit("close");
 }
 
 function goBack() {
+  if (embedded.value) {
+    void requestClose();
+    return;
+  }
   if (window.history.state?.back) router.back();
   else void router.push("/today");
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (deleteOpen.value) return;
-  const target = event.target as HTMLElement | null;
-  const typing =
-    target?.tagName === "INPUT" ||
-    target?.tagName === "TEXTAREA" ||
-    target?.isContentEditable;
-  if (typing) return;
-  if (event.key === "e" || event.key === "E") {
-    void startEdit();
-  }
 }
 
 function onWindowBlur() {
@@ -359,7 +407,6 @@ function onBeforeUnload() {
 }
 
 onMounted(() => {
-  window.addEventListener("keydown", onKeydown);
   window.addEventListener("blur", onWindowBlur);
   window.addEventListener("beforeunload", onBeforeUnload);
   document.addEventListener("visibilitychange", onVisibility);
@@ -371,8 +418,10 @@ onBeforeRouteLeave(async () => {
 });
 
 onBeforeUnmount(() => {
-  void flushSave();
-  window.removeEventListener("keydown", onKeydown);
+  void (async () => {
+    await flushSave();
+    gcDetachedAssets();
+  })();
   window.removeEventListener("blur", onWindowBlur);
   window.removeEventListener("beforeunload", onBeforeUnload);
   document.removeEventListener("visibilitychange", onVisibility);
@@ -392,8 +441,13 @@ watch(
 <template>
   <div class="view" :class="{ indent: session.settings.indentFirstLine }">
     <header class="topbar">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="goBack">
-        <Icon :path="mdiArrowLeft" :size="22" />
+      <button
+        class="icon-btn"
+        type="button"
+        :aria-label="embedded ? t('common.close') : t('common.back')"
+        @click="goBack"
+      >
+        <Icon :path="embedded ? mdiClose : mdiArrowLeft" :size="22" />
       </button>
 
       <div class="heading">
@@ -448,6 +502,8 @@ watch(
       </div>
     </header>
 
+    <p v-if="saveState === 'error' && saveError" class="save-detail">{{ saveError }}</p>
+
     <MetaChips
       v-if="journal && !loading"
       :tags="journal.tags"
@@ -467,9 +523,10 @@ watch(
         @action="goBack"
       />
       <StateBlock
-        v-else-if="failed"
+        v-else-if="failReason"
         kind="error"
         :title="t('common.error')"
+        :hint="failReason ?? undefined"
         :action-label="t('common.retry')"
         @action="load"
       />
@@ -481,10 +538,11 @@ watch(
               :model-value="content"
               @update:model-value="onEditorInput"
               @ready="onEditorReady"
+              @assets-imported="onAssetsImported"
             />
           </div>
           <div v-else-if="journal" key="preview" class="preview-wrap">
-            <article ref="previewEl" class="preview" @dblclick="startEdit" />
+            <article ref="previewEl" class="preview" @click="onPreviewClick" @dblclick="startEdit" />
             <p v-if="readOnly" class="hint">
               {{ t("detail.readOnlyHint") }}
             </p>
@@ -505,6 +563,8 @@ watch(
       <Icon :path="mdiPencil" :size="18" />
       {{ t("common.edit") }}
     </button>
+
+    <AssetViewer :src="viewerSrc" @close="viewerSrc = null" />
 
     <ConfirmDialog
       :open="deleteOpen"
@@ -588,6 +648,18 @@ watch(
   text-decoration: underline;
 }
 
+.save-detail {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-hairline);
+  background: var(--c-surface-2);
+  color: var(--c-danger);
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -635,10 +707,6 @@ watch(
   background: var(--c-hit);
   color: inherit;
   border-radius: 2px;
-}
-
-.preview :deep(.dd-hit.current) {
-  background: var(--c-hit-current);
 }
 
 .hint {

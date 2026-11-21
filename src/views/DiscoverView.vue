@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { mdiClose, mdiMagnify } from "@mdi/js";
-import { journalList, onDataChanged, searchQuery, tagList } from "../ipc/client";
+import { describeError, journalList, onDataChanged, searchQuery, tagList } from "../ipc/client";
 import type { JournalSummary, Tag } from "../ipc/types";
 import { t } from "../i18n";
 import Icon from "../components/Icon.vue";
@@ -14,31 +14,48 @@ const text = ref("");
 const results = ref<JournalSummary[]>([]);
 const partial = ref(false);
 const loading = ref(true);
-const error = ref(false);
+const error = ref<string | null>(null);
 const tags = ref<Tag[]>([]);
 const tagId = ref<string | null>(null);
 
 let timer: number | undefined;
 let token = 0;
 
+const filtersActive = computed(() => !!tagId.value);
+
+const sectionLabel = computed(() => {
+  if (text.value.trim()) return t("discover.results");
+  if (tagId.value) {
+    return `#${tags.value.find((tag) => tag.id === tagId.value)?.name ?? ""}`;
+  }
+  return t("discover.recent");
+});
+
 async function run() {
   const current = ++token;
   loading.value = true;
-  error.value = false;
+  error.value = null;
+  const needle = text.value.trim();
   try {
-    if (!text.value.trim() && tagId.value) {
-      const page = await journalList({ tagId: tagId.value, limit: 100 });
+    if (needle) {
+      const page = await searchQuery(needle, {
+        tagId: tagId.value,
+        limit: 100,
+      });
+      if (current !== token) return;
+      results.value = page.items;
+      partial.value = page.partial;
+    } else {
+      const page = await journalList({
+        tagId: tagId.value,
+        limit: 100,
+      });
       if (current !== token) return;
       results.value = page.items;
       partial.value = false;
-      return;
     }
-    const page = await searchQuery(text.value.trim(), { limit: 100 });
-    if (current !== token) return;
-    results.value = page.items;
-    partial.value = page.partial;
-  } catch {
-    if (current === token) error.value = true;
+  } catch (err) {
+    if (current === token) error.value = describeError(err);
   } finally {
     if (current === token) loading.value = false;
   }
@@ -54,6 +71,11 @@ async function loadTags() {
 
 function pickTag(id: string | null) {
   tagId.value = id;
+  void run();
+}
+
+function clearFilters() {
+  tagId.value = null;
   void run();
 }
 
@@ -136,6 +158,7 @@ onBeforeUnmount(() => {
         v-else-if="error"
         kind="error"
         :title="t('common.error')"
+        :hint="error ?? undefined"
         :action-label="t('common.retry')"
         @action="run"
       />
@@ -143,20 +166,18 @@ onBeforeUnmount(() => {
         v-else-if="!results.length"
         kind="empty"
         :title="
-          text ? t('discover.empty') : tagId ? t('discover.emptyTag') : t('today.empty')
+          filtersActive
+            ? t('discover.filterEmpty')
+            : text
+              ? t('discover.empty')
+              : t('today.empty')
         "
-        :hint="text ? t('discover.emptyHint') : undefined"
+        :hint="text && !filtersActive ? t('discover.emptyHint') : undefined"
+        :action-label="filtersActive ? t('discover.clearFilters') : undefined"
+        @action="clearFilters"
       />
       <template v-else>
-        <p class="section">
-          {{
-            text
-              ? t("discover.placeholder")
-              : tagId
-                ? `#${tags.find((tag) => tag.id === tagId)?.name ?? ""}`
-                : t("discover.recent")
-          }}
-        </p>
+        <p class="section">{{ sectionLabel }}</p>
         <JournalCard
           v-for="item in results"
           :key="item.id"

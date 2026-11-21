@@ -22,6 +22,8 @@ pub struct JournalSummary {
     pub day_key: String,
     pub words: i64,
     pub asset_n: i64,
+    pub audio_n: i64,
+    pub video_n: i64,
     pub cover_asset: Option<String>,
     pub pinned: bool,
     pub sensitive: bool,
@@ -46,6 +48,8 @@ pub struct Journal {
     pub sensitive: bool,
     pub words: i64,
     pub asset_n: i64,
+    pub audio_n: i64,
+    pub video_n: i64,
     pub cover_asset: Option<String>,
     pub revision: i64,
     pub tags: Vec<TagDto>,
@@ -72,7 +76,8 @@ pub struct SaveInput {
 }
 
 const SUMMARY_COLS: &str = "id, content, title, mood, recorded_at, recorded_off, day_key, \
-                            words, asset_n, cover_asset, pinned, sensitive, deleted_at";
+                            words, asset_n, audio_n, video_n, cover_asset, pinned, sensitive, \
+                            deleted_at";
 
 fn escape_like(text: &str) -> String {
     text.replace('\\', "\\\\")
@@ -125,6 +130,8 @@ fn map_summary_with_needle(
         day_key: row.get("day_key")?,
         words: row.get("words")?,
         asset_n: row.get("asset_n")?,
+        audio_n: row.get("audio_n")?,
+        video_n: row.get("video_n")?,
         cover_asset: row.get("cover_asset")?,
         pinned: row.get::<_, i64>("pinned")? != 0,
         sensitive: row.get::<_, i64>("sensitive")? != 0,
@@ -230,8 +237,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<Journal, AppError> {
     let found = conn
         .query_row(
             "SELECT id, content, format, title, mood, recorded_at, recorded_off, day_key, \
-             created_at, updated_at, deleted_at, pinned, sensitive, words, asset_n, \
-             cover_asset, revision FROM journal WHERE id = ?1",
+             created_at, updated_at, deleted_at, pinned, sensitive, words, asset_n, audio_n, \
+             video_n, cover_asset, revision FROM journal WHERE id = ?1",
             [id],
             |row| {
                 let content: String = row.get("content")?;
@@ -256,6 +263,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<Journal, AppError> {
                     sensitive: row.get::<_, i64>("sensitive")? != 0,
                     words: row.get("words")?,
                     asset_n: row.get("asset_n")?,
+                    audio_n: row.get("audio_n")?,
+                    video_n: row.get("video_n")?,
                     cover_asset: row.get("cover_asset")?,
                     revision: row.get("revision")?,
                     tags: Vec::new(),
@@ -312,13 +321,12 @@ fn replace_tags(
     Ok(())
 }
 
-pub fn scan_assets(content: &str) -> (i64, Option<String>) {
-    const PREFIX: &str = "ddasset://image/";
+fn scan_prefix(content: &str, prefix: &str) -> (i64, Option<String>) {
     let mut count = 0;
     let mut first: Option<String> = None;
     let mut rest = content;
-    while let Some(pos) = rest.find(PREFIX) {
-        let after = &rest[pos + PREFIX.len()..];
+    while let Some(pos) = rest.find(prefix) {
+        let after = &rest[pos + prefix.len()..];
         let end = after
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
             .unwrap_or(after.len());
@@ -331,6 +339,13 @@ pub fn scan_assets(content: &str) -> (i64, Option<String>) {
         rest = &after[end..];
     }
     (count, first)
+}
+
+pub fn scan_assets(content: &str) -> (i64, i64, i64, Option<String>) {
+    let (images, cover) = scan_prefix(content, "ddasset://image/");
+    let (audios, _) = scan_prefix(content, "ddasset://audio/");
+    let (videos, _) = scan_prefix(content, "ddasset://video/");
+    (images, audios, videos, cover)
 }
 
 pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError> {
@@ -346,7 +361,7 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
         return Err(AppError::new("bad_format", "不支持的正文格式"));
     }
     let word_count = words::count_words(&input.content);
-    let (asset_n, cover_asset) = scan_assets(&input.content);
+    let (asset_n, audio_n, video_n, cover_asset) = scan_assets(&input.content);
     let explicit_title = input
         .title
         .and_then(|value| (!value.trim().is_empty()).then_some(value.trim().to_string()));
@@ -383,8 +398,8 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
         tx.execute(
             "UPDATE journal SET content = ?1, format = ?2, title = ?3, mood = ?4, \
              recorded_at = ?5, recorded_off = ?6, day_key = ?7, updated_at = ?8, \
-             pinned = ?9, sensitive = ?10, words = ?11, asset_n = ?12, cover_asset = ?13, \
-             revision = revision + 1 WHERE id = ?14",
+             pinned = ?9, sensitive = ?10, words = ?11, asset_n = ?12, audio_n = ?13, \
+             video_n = ?14, cover_asset = ?15, revision = revision + 1 WHERE id = ?16",
             params![
                 input.content,
                 format,
@@ -398,6 +413,8 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
                 input.sensitive as i64,
                 word_count,
                 asset_n,
+                audio_n,
+                video_n,
                 cover_asset,
                 id
             ],
@@ -414,8 +431,9 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
         let id = uuid::Uuid::now_v7().to_string();
         tx.execute(
             "INSERT INTO journal(id, content, format, title, mood, recorded_at, recorded_off, \
-             day_key, created_at, updated_at, pinned, sensitive, words, asset_n, cover_asset, \
-             revision) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14, 1)",
+             day_key, created_at, updated_at, pinned, sensitive, words, asset_n, audio_n, \
+             video_n, cover_asset, revision) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1)",
             params![
                 id,
                 input.content,
@@ -430,6 +448,8 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
                 input.sensitive as i64,
                 word_count,
                 asset_n,
+                audio_n,
+                video_n,
                 cover_asset
             ],
         )?;
@@ -589,6 +609,8 @@ pub fn search(
     text: &str,
     from: Option<&str>,
     to: Option<&str>,
+    tag_id: Option<&str>,
+    mood: Option<&str>,
     limit: i64,
 ) -> Result<(Vec<JournalSummary>, bool), AppError> {
     let limit = limit.clamp(1, 200);
@@ -606,6 +628,17 @@ pub fn search(
     if let Some(to) = to {
         sql.push_str(" AND day_key <= ?");
         args.push(to.to_string().into());
+    }
+    if let Some(tag_id) = tag_id {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM journal_tag jt \
+             WHERE jt.journal_id = journal.id AND jt.tag_id = ?)",
+        );
+        args.push(tag_id.to_string().into());
+    }
+    if let Some(mood) = mood {
+        sql.push_str(" AND mood = ?");
+        args.push(mood.to_string().into());
     }
     sql.push_str(" ORDER BY recorded_at DESC, id DESC LIMIT ?");
     args.push((limit + 1).into());
@@ -684,6 +717,27 @@ mod tests {
         let marks = day_marks(&conn, "2026-11-01", "2026-11-30").expect("marks");
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].n, 1);
+    }
+
+    #[test]
+    fn save_derives_media_counts_by_kind() {
+        let mut conn = test_conn();
+        let saved = save(
+            &mut conn,
+            input(
+                "![a](ddasset://image/a.png)\n\n![b](ddasset://audio/b.mp3)\n\n\
+                 ![c](ddasset://video/c.mp4)\n\n![d](ddasset://image/d.png)",
+            ),
+        )
+        .expect("save");
+        assert_eq!(saved.asset_n, 2);
+        assert_eq!(saved.audio_n, 1);
+        assert_eq!(saved.video_n, 1);
+        assert_eq!(saved.cover_asset.as_deref(), Some("a.png"));
+
+        let page = list_day(&conn, "2026-11-21");
+        assert_eq!(page.items[0].audio_n, 1);
+        assert_eq!(page.items[0].video_n, 1);
     }
 
     #[test]
@@ -832,11 +886,12 @@ mod tests {
         save(&mut conn, input("昨晚梦见一只猫")).expect("save");
         save(&mut conn, input("100% 完成")).expect("save");
 
-        let (items, partial) = search(&conn, "梦", None, None, 20).expect("search");
+        let (items, partial) = search(&conn, "梦", None, None, None, None, 20).expect("search");
         assert!(!partial);
         assert_eq!(items.len(), 1);
 
-        let (none, _) = search(&conn, "%", None, None, 20).expect("search escaped");
+        let (none, _) =
+            search(&conn, "%", None, None, None, None, 20).expect("search escaped");
         assert_eq!(none.len(), 1);
         assert!(none[0].preview.contains("100%"));
     }

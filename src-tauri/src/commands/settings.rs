@@ -2,7 +2,7 @@ use serde_json::Value;
 use tauri::{Emitter, State};
 
 use crate::{
-    commands::run_blocking,
+    commands::run_blocking_public,
     db::settings::{self, Settings},
     error::AppError,
     events::SETTINGS_CHANGED,
@@ -12,7 +12,7 @@ use crate::{
 #[tauri::command]
 pub async fn settings_get_all(state: State<'_, AppState>) -> Result<Settings, AppError> {
     let st = state.inner().clone();
-    run_blocking(st, move |state| {
+    run_blocking_public(st, move |state| {
         state.with_db(|conn| settings::get_all(conn))
     })
     .await
@@ -24,7 +24,7 @@ pub async fn settings_patch(
     patch: Value,
 ) -> Result<Settings, AppError> {
     let st = state.inner().clone();
-    let result = run_blocking(st.clone(), move |state| {
+    let result = run_blocking_public(st.clone(), move |state| {
         state.with_db(|conn| settings::patch(conn, patch))
     })
     .await?;

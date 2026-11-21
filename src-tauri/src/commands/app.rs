@@ -18,6 +18,19 @@ pub struct Counts {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AssetPaths {
+    pub assets_dir: String,
+}
+
+/// Not lock-gated: the frontend needs the path before unlock to build asset URLs.
+#[tauri::command]
+pub fn asset_paths(state: State<'_, AppState>) -> AssetPaths {
+    AssetPaths {
+        assets_dir: state.paths.assets_dir.to_string_lossy().into_owned(),
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct DataInfo {
     pub db_path: Option<String>,
     pub data_dir: String,

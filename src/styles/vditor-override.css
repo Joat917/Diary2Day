@@ -32,7 +32,8 @@
   gap: 2px;
   height: auto;
   min-height: 46px;
-  padding: var(--s-1) var(--s-2);
+  /* Vditor writes an inline padding-left aligned to the preview column; drop it. */
+  padding: var(--s-1) var(--s-2) !important;
   margin: var(--s-2) var(--s-2) 0;
   background: var(--c-surface-2);
   border: none;
@@ -46,7 +47,7 @@
   display: flex;
   flex: 1 1 0;
   height: 32px;
-  min-width: 32px;
+  min-width: 0;
   padding: 0;
   box-sizing: border-box;
 }
@@ -65,6 +66,35 @@
   background: var(--c-surface-1);
 }
 
+/* Toolbar tips open downward: upward tips are clipped above the toolbar. */
+.vditor-toolbar .vditor-tooltipped::after {
+  top: 100%;
+  bottom: auto;
+  right: 50%;
+  left: auto;
+  margin: 6px 0 0;
+  transform: translateX(50%);
+}
+
+.vditor-toolbar .vditor-tooltipped::before {
+  top: auto;
+  bottom: -5px;
+  border-top-color: transparent;
+  border-bottom-color: #3b3e43;
+}
+
+.vditor-toolbar .vditor-tooltipped[data-type="dd-image"]::after {
+  right: auto;
+  left: 0;
+  transform: none;
+}
+
+.vditor-toolbar .vditor-tooltipped[data-type="undo"]::after,
+.vditor-toolbar .vditor-tooltipped[data-type="redo"]::after {
+  right: 0;
+  transform: none;
+}
+
 .vditor-toolbar__item svg {
   width: 18px;
   height: 18px;
@@ -74,6 +104,19 @@
 .vditor-toolbar__item--current svg,
 .vditor-toolbar__item .vditor-tooltipped:hover svg {
   color: var(--c-primary);
+}
+
+/* Keep disabled items unhighlighted; these must follow the hover rules. */
+.vditor-toolbar__item .vditor-menu--disabled,
+.vditor-toolbar__item .vditor-menu--disabled:hover {
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.vditor-toolbar__item .vditor-menu--disabled svg,
+.vditor-toolbar__item .vditor-menu--disabled:hover svg,
+.vditor-toolbar__item--current .vditor-menu--disabled svg {
+  color: var(--c-on-surface-faint);
 }
 
 .vditor-toolbar__divider {
@@ -89,11 +132,11 @@
   display: none;
 }
 
-/* Narrow editors: two aligned rows of seven, no group dividers. */
+/* Narrow editors: two rows of eight and seven, no group dividers. */
 @container (max-width: 559px) {
   .vditor-toolbar {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     justify-items: center;
     align-items: center;
     row-gap: var(--s-1);

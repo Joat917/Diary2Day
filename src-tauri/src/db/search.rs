@@ -14,6 +14,8 @@ pub struct SearchParams {
     pub text: String,
     pub from: Option<String>,
     pub to: Option<String>,
+    pub tag_id: Option<String>,
+    pub mood: Option<String>,
     pub limit: i64,
 }
 
@@ -26,8 +28,8 @@ pub fn query(conn: &Connection, params: SearchParams) -> Result<SearchPage, AppE
                 day_key: None,
                 from: params.from,
                 to: params.to,
-                tag_id: None,
-                mood: None,
+                tag_id: params.tag_id,
+                mood: params.mood,
                 include_trash: false,
                 limit: params.limit,
                 cursor: None,
@@ -44,6 +46,8 @@ pub fn query(conn: &Connection, params: SearchParams) -> Result<SearchPage, AppE
         &text,
         params.from.as_deref(),
         params.to.as_deref(),
+        params.tag_id.as_deref(),
+        params.mood.as_deref(),
         params.limit,
     )?;
     Ok(SearchPage { items, partial })

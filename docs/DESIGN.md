@@ -1,4 +1,4 @@
-# Diary2Day 代码设计 v0.1
+# Diary2Day 代码设计 v0.3
 
 对应需求：[PRD.md](./PRD.md)。已定：胖 Rust 内核、Vditor IR 模式、桌面 + 移动同期。
 
@@ -14,51 +14,45 @@ Rust 持有全部真身：schema、查询、天归属计算、字数、附件落
 
 ```
 src-tauri/src/
-  lib.rs            装配：建连接、跑迁移、注册协议与命令、窗口事件 → 锁
-  state.rs          AppState { db: Mutex<Connection>, paths: AppPaths, lock: LockState, ops: Ops }
-  error.rs          AppError(code, msg, detail) + Into<serde_json::Value>，前端按 code 分支
+  lib.rs            装配：建连接、跑迁移、授权 asset 协议目录、注册命令、窗口事件 → 锁
+  state.rs          AppState { db: Mutex<Connection>, paths: AppPaths, app, lock: Mutex<LockRuntime> }
+  error.rs          AppError(code, msg, detail) + Into<serde_json::Value>，前端按 code 分支；
+                    client.ts 的 describeError 把三者拼成可读文本，所有错误态直接展示
   db/
-    conn.rs         open + PRAGMA + busy_timeout + with_db/with_db_ro
-    migrate.rs      版本化迁移；迁移前自动快照；失败回滚
-    schema/*.sql    0001_init.sql、0002_...（include_str!，按文件名序执行）
+    conn.rs         open + PRAGMA + busy_timeout + with_db
+    migrate.rs      版本化迁移（schema/0001_init.sql、0002_m2.sql、0003_media_counts.sql，include_str! 按序执行）
     journal.rs      条目 upsert / 列表 / 详情 / 软删 / 恢复 / purge / 置顶 / 敏感
     tag.rs          标签 CRUD + 合并 + 引用计数
     search.rs       FTS 与短查询兜底，策略选择集中在这一个函数里
-    daymark.rs      打点增量维护 + 全量重算
+    export.rs       导出/导入共用查询：存活条目、附件 upsert、schema_version
+    lock.rs         应用锁口令（SHA-256(salt:code)）与锁态快照
     settings.rs     SettingKey 枚举声明类型/默认/校验
-    stats.rs        聚合统计（连续天数读 day_mark）
   domain/           纯函数，零 IO
     day_key.rs      offset 解析、落在哪天、周条/整月区间、夏令时
     title.rs        首行派生标题、100/300 截断
     words.rs        CJK 按字 / 拉丁按词 / 代码块与表格排除
     name_key.rs     标签名折叠（casefold + 全角折叠 + trim）
-    asset_name.rs   随机名生成 + 扩展名白名单 + 协议 URL ↔ 磁盘路径解析（§3.1 的校验实现）
-    md_doc.rs       导出用 md 文件的 front-matter 读写 + 附件 URL 双向映射（导出与导入共用）
-    trash.rs        保留期判定（时钟可注入）
   fs/
-    paths.rs        AppPaths { data_dir, db_path, assets_dir, cache_dir }
-    assets.rs       原子写入、按 hash 命中已有、缩略图产出、§3.1 文件协议的读实现
-    export.rs       导出人可读目录（临时目录 → 原子改名 → 进度事件 → 可取消）
-    backup.rs       VACUUM INTO 副本 + assets + manifest → zip
-    restore.rs      校验 manifest/版本 → 快照 → 替换 → 重开连接
+    assets.rs       附件写入、缩略图产出、64MB 上限与类型嗅探
+  export.rs         导出人可读目录 / 备份 zip / 恢复整库（§6.4–§6.5，含进度事件）
+  share.rs          移动端分享收件箱 → 附件导入 + 新条目（§6.6）
   commands/         #[tauri::command] 薄壳：解参 → 调上面模块 → 映射 AppError
-    journal.rs tag.rs search.rs settings.rs media.rs data.rs stats.rs app.rs
+    journal.rs tag.rs search.rs settings.rs media.rs data.rs lock.rs app.rs share.rs
   events.rs         事件名常量 + payload 类型
-  lock.rs           应用锁（口令 hash、失焦计时、锁态广播）
-  ops.rs            长任务登记表：op_id → AtomicBool 取消位 + 进度 emit
 
 src/
   ipc/
     client.ts       invoke 的唯一出口：typed 函数 + 错误反序列化
-    asset-url.ts    `ddasset://{kind}/{name}` 的唯一拼接处（§3.1）
-    bindings/       ts-rs 生成的 DTO，进版本库，由 CI 校验与生成物一致
+    types.ts        DTO 手写声明，与 Rust 的 serde 输出逐字段对齐
+  utils/assetUrl.ts 逻辑 URL `ddasset://{kind}/{name}` 与物理 asset URL 的唯一映射处（§3.1）
   views/            TodayView DiscoverView MeView DetailView
-  components/       TodayCard WeekStrip MiniCalendar MonthSheet JournalCard
-                    EditorPane MetaChips FindBar FilterBar AssetViewer
-                    Icon StateBlock（空态/加载/错误共用一个，UI.md §3.7）
-  composables/      useAutosave useBreakpoint useDayMarks useSettings useFind useCollection
+  components/       TodayCard WeekStrip MiniCalendar JournalCard
+                    EditorPane MetaChips AssetViewer
+                    CodeDialog ConfirmDialog LockOverlay
+                    Icon StateBlock（空态/加载/错误共用一个，UI.md §3.6）
+  composables/      useBreakpoint（自动保存、列表加载当前写在各自视图里）
   utils/date.ts     前端日记日：diaryToday / diaryDayKey / 24+ 时刻（与 Rust 同式，只用于显示与写入闸门）
-  stores/           session.ts（锁态 + 设置缓存），全局仅此一个 store
+  stores/           session.ts（设置缓存）+ lock.ts（锁态），Pinia 仅此两处
   i18n/             messages/en.ts（键的唯一真相）+ messages/zh-CN.ts + t()（约 100 行）
   styles/           tokens.css（全部取值，UI.md §1）+ vditor-override.css（覆盖 Vditor 的唯一入口）
 ```
@@ -87,7 +81,9 @@ CREATE TABLE journal (
   pinned       INTEGER NOT NULL DEFAULT 0,
   sensitive    INTEGER NOT NULL DEFAULT 0,
   words        INTEGER NOT NULL DEFAULT 0,
-  asset_n      INTEGER NOT NULL DEFAULT 0,          -- 派生：save 事务内扫正文的 ddasset://
+  asset_n      INTEGER NOT NULL DEFAULT 0,          -- 派生：save 事务内扫正文的 ddasset://image/
+  audio_n      INTEGER NOT NULL DEFAULT 0,          -- 派生：同上，ddasset://audio/
+  video_n      INTEGER NOT NULL DEFAULT 0,          -- 派生：同上，ddasset://video/
   cover_asset  TEXT,                                -- 派生：首张 image 的 name
   revision     INTEGER NOT NULL DEFAULT 1
 );
@@ -121,6 +117,12 @@ CREATE TABLE asset (                                -- 与 journal 之间零关�
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- janitor_last_run / install_id
 
+CREATE TABLE app_lock (                             -- M2：应用锁只有一个口令，见 §6.5
+  id      INTEGER PRIMARY KEY CHECK (id = 1),
+  salt    TEXT    NOT NULL,
+  hash    TEXT    NOT NULL,                         -- SHA-256(salt:code)
+  enabled INTEGER NOT NULL DEFAULT 0);
+
 CREATE VIRTUAL TABLE journal_fts USING fts5(
   title, content, content='journal', content_rowid='rowid',
   tokenize='trigram case_sensitive 0');
@@ -143,7 +145,7 @@ CREATE TRIGGER journal_au AFTER UPDATE OF title, content ON journal BEGIN
 day_key = date((recorded_at → recorded_off 得本地墙钟) - day_boundary_minutes)
 ```
 
-`recorded_at` / `recorded_off` 是事实，永不因为分界点变化而改写（PRD §2.8）。前端上传 offset 与墙上时间，`day_key` 由 Rust 单向下发；前端只为 UI 判定实现同一公式（`utils/date.ts::diaryToday`），不写库。分界点改值时按 §2.2 重排。
+`recorded_at` / `recorded_off` 是事实，永不因为分界点变化而改写（PRD §2.8）。分界点是 0–479 分钟的整数；设置校验拒绝 ≥480，前端 `parseBoundary` 与 Rust 侧都把越界值夹回区间。前端上传 offset 与墙上时间，`day_key` 由 Rust 单向下发；前端只为 UI 判定实现同一公式（`utils/date.ts::diaryToday`），不写库。分界点改值时按 §2.2 重排。
 
 ### 2.2 day_mark 的维护
 
@@ -155,33 +157,32 @@ save / delete / purge 在同一事务内增量更新（`UPDATE ... SET n = n + ?
 
 ## 3. IPC 面
 
-Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 `limit/cursor`，cursor 是 base64 的 `pinned|recorded_at|id`（置顶优先级也在游标里）。**命令只搬文字**——正文、标题、设置值、元数据；附件字节一律走 §3.1 的文件协议。
+Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 `limit/cursor`，cursor 是 base64 的 `pinned|recorded_at|id`（置顶优先级也在游标里）。**命令只搬文字**——正文、标题、设置值、元数据；附件字节一律走 §3.1 的内置 `asset` 协议，不过 IPC。
 
 | 命令 | 入参 → 返回 | 备注 |
 |---|---|---|
-| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 摘要字段：id / 派生 title / `preview`(300 字符) / mood / day_key / words / `asset_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
+| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 排序固定 `pinned DESC, recorded_at DESC, id DESC`，游标按同一顺序推进。摘要字段：id / 派生 title / `preview`(300 字符) / mood / day_key / words / `asset_n` / `audio_n` / `video_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
 | `journal_get` | `id` → `Journal`（全量 + tag 对象） | |
-| `journal_save` | `id? content format title mood tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空白内容不创建条目 |
+| `journal_save` | `id? content format title mood tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`audio_n`/`video_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空内容的新建由前端拦截（§5） |
 | `journal_delete` | `id` → `day_key` | 软删；同事务更新 `day_mark` |
 | `journal_restore` / `journal_purge` | `id` / 无参 | purge 由 janitor 调，UI 也提供"清空回收站" |
 | `journal_trash_list` | `limit cursor` → `JournalPage` | |
 | `journal_set_pinned` / `journal_set_sensitive` | `id value` → unit | 入参只有 id 与值 |
 | `day_marks` | `from_key to_key` → `DayMark[]` | 周条与整月共用；切月查月区间 |
-| `search_query` | `text filters range limit cursor` → `SearchPage{items, partial}` | `partial=true` 时 UI 显示"结果可能不完整"（§6.3） |
-| `search_locate` | `id text` → `{total, ranges[]}` | 详情内查找（§6.3）。偏移单位是 **Unicode 码点** |
+| `search_query` | `text from? to? tag_id? mood? limit` → `SearchPage{items, partial}` | 空 `text` 走同一 `journal_list` 路径（§6.3）。UI 目前只传 `text` 与 `tag_id`；`from` / `mood` 留给将来的"高级搜索"（PRD §2.5），不预埋界面。`partial=true` 时 UI 显示"结果可能不完整" |
 | `tag_list` / `tag_create` / `tag_rename` / `tag_delete` / `tag_merge` | 常规 | create/rename 按 `name_key` 查重，冲突返回 `code=tag_exists` |
 | `settings_get_all` | → `Settings` | 一次拿全量，前端启动时缓存（§5） |
 | `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed` |
 | `stats_overview` | → `Stats` | 全走聚合 + `day_mark` |
-| `media_import` | `paths[]` → `Asset[]` | 复制/移动到 `assets/`，随机名，抽尺寸或时长，产出缩略图（§3.1）。返回元数据 |
-| `data_export_dir` | `target_dir` → `op_id` | 人可读 md 目录（PRD §5.2） |
-| `data_backup` | `target?` → `op_id` | |
-| `data_restore` | `path strategy(merge｜replace)` → `op_id` | |
-| `data_import_md` | `dir zip?` → `op_id` | 与 export 对称（§6.4） |
+| `media_import` | `files[{origName, data(base64)}]` → `Asset[]` | 字节走 IPC 而不是路径：粘贴、拖入、移动端选择器都只有 `File`，不给 Rust 假设本地路径存在。单文件 64 MB 上限；扩展名缺失时按 magic 嗅探；图片抽尺寸并产出缩略图（§3.1） |
+| `share_drain` | → `ShareReport{id, dayKey, assets}` 或 `null` | 移动端分享收件箱：Kotlin `MainActivity` 把系统分享的文本/文件写进 `cache/share-inbox`，命令校验路径、导入资产并建条目（§6.6）。锁态返回 `locked`，收件箱保留待解锁重试 |
+| `data_export_dir` | `target_dir` → `ExportReport{dir, journals, assets}` | 同步等待完成；在 `target_dir` 下新建 `Diary2Day-<ts>/`，人可读 md + `assets/`（PRD §5.2、§6.4） |
+| `data_backup` | `target` → `BackupReport{path, size}` | `VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip（§6.5） |
+| `data_restore` | `path` → `ImportReport{journals, assets}` | 只支持整库替换，不做 merge；校验 schema 后换连接并重载锁运行时（§6.5） |
+| `data_import_md` | `dir` → `ImportReport{journals, assets}` | 与 export 对称（§6.4）；同一 `id` 按 upsert 处理 |
 | `data_info` | → `DataInfo{db_path, data_dir, sizes{...}, counts{...}}` | 关于页与"打开数据目录"用；移动端 `db_path` 返回 `null` |
 | `data_rebuild` | `what(day_mark｜fts｜tags｜assets)` → `Report` | 诊断页入口 |
-| `op_cancel` | `op_id` → `bool` | |
-| `app_lock_status` / `app_lock_set` / `app_lock_clear` / `app_lock_unlock` | `code?` → `LockState` | UI 门（PRD §5.4） |
+| `app_lock_status` / `app_lock_set` / `app_lock_clear` / `app_lock_unlock` / `app_lock_engage` | `code?` → `LockState{enabled, locked}` | UI 门（PRD §5.4）。`set` 只收新口令，`clear` / `unlock` 收当前口令；`engage` 由前端失焦计时触发 |
 | `app_open_data_dir` | → unit | 桌面 |
 
 事件（`events.rs` 里定义常量，前端只 `listen(EVENT.dataChanged, …)`）：
@@ -189,30 +190,29 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | 事件 | payload | 用途 |
 |---|---|---|
 | `dd://data-changed` | `{kind:'journal'｜'tag'｜'all', id?, day_key?}` | 列表与打点的局部刷新依据（§5 的失效规则） |
-| `dd://op-progress` | `{op_id, phase, done, total}` | 导出/备份/恢复的进度条 |
-| `dd://op-done` / `dd://op-failed` | `{op_id, result｜error}` | 收尾与错误呈现 |
-| `dd://lock-state` | `{locked, reason}` | Rust 侧失焦计时驱动（§6.5） |
+| `dd://op-progress` | `{op_id, phase, done, total}` | 导出/导入每 20 条广播一次（§6.4） |
+| `dd://lock-state` | `{enabled, locked}` | 前端失焦计时与锁页共用（§6.5） |
 | `dd://settings-changed` | `{keys[]}` | 主题与语言即时生效 |
 
-类型同步：DTO 用 `ts-rs` derive，`cargo run --bin export-types` 生成到 `src/ipc/bindings/`，生成物进版本库并挂进 CI（`cargo test` 后校验 diff 为空）。
+类型同步：DTO 当前手写在 `src/ipc/types.ts`，字段名与 Rust 的 `serde(rename_all = "camelCase")` 输出逐项对齐（Rust 是真相）。原先计划的 `ts-rs` 生成与 `export-types` 校验尚未接入；接入后生成物放 `src/ipc/bindings/` 并入 CI。
 
-### 3.1 附件走文件协议，字节走 WebView 直读
+### 3.1 附件走内置 asset 协议，字节走 WebView 直读
 
-图片和音视频由 WebView 自己发请求取，Rust 只经手元数据。
+图片和音视频由 WebView 自己请求，Rust 只经手元数据，字节不过 IPC。
 
-**机制**：`lib.rs` 里 `register_asynchronous_uri_scheme_protocol("ddasset", …)`，实现放在 `fs/assets.rs`，职责单一——把 `ddasset://{kind}/{name}` 映射到 `assets_dir` 下的文件，回 `Content-Type`（`mime_guess`）、`Content-Length`、`Accept-Ranges: bytes`、`Cache-Control: immutable`，请求带 Range 就 `seek` 后回 206。它只依赖 `AppPaths` 与 `LockState`，与数据库连接互相独立；导出/备份占用只读连接期间图片照常加载。
+**机制**：启用 Tauri 内置的 `asset` 协议（`tauri` 的 `protocol-asset` feature + `app.security.assetProtocol.enable`），启动时 `lib.rs` 用 `app.asset_protocol_scope().allow_directory(assets_dir, true)` 把 scope 收窄到附件目录（含 `.thumbs/`）。仓库里不再有自定义 scheme 的转发代码。物理 URL 由 `@tauri-apps/api/core` 的 `convertFileSrc` 生成：Windows/Android 是 `http://asset.localhost/<编码后的绝对路径>`，其余平台是 `asset://localhost/<编码后的绝对路径>`。文件不存在回 404，越出 scope 回 403，MIME 由 Tauri 嗅探，Range（视频拖动）由 Tauri 处理。
 
-**URL 直接存进正文**（`![](ddasset://image/k3f9a1.png)`），渲染路径对 URL 零介入，正文与源文本自始至终同一份字符串。前缀替换只发生在导出与导入两处（§6.4）。
+**正文里只存逻辑 URL**（`![](ddasset://image/k3f9a1.png)`），数据库、导出格式与分享文本都是这一份字符串。物理 URL 只在两处出现：把内容交给 Vditor 之前（编辑器初始化、只读预览）用 `expandAssetUrls` 展开，取回编辑器内容或落库之前用 `collapseAssetUrls` 折回。`src/utils/assetUrl.ts` 是唯一映射处；启动时 `main.ts` 通过 `asset_paths` 命令拿到 `assets_dir`（该命令不走锁门禁，否则锁定状态下无法拼 URL）。
 
-**协议校验三条**：
+**安全**：scope 只覆盖 `assets_dir`，请求路径先经 `SafePathBuf` 再查 scope；`..`、绝对路径跳转与目录外文件一律 403/404。扩展名 → kind 的校验在前端收敛（`collapseAssetUrls` 只把已知媒体扩展名折回逻辑 URL），Rust 侧的 `scan_asset_refs`、导出与分享逻辑不变。
 
-- `name` 匹配 `[A-Za-z0-9_-]+\.[a-z0-9]{1,5}`（单扩展名），拼出的路径 resolve 后仍落在 `assets_dir` 内。
-- `{kind}` 取 `image` / `audio` / `video` / `t`（指向 `.thumbs/`）四者之一，其余返回 404。
-- **锁态返回 404**。§6.5 的"遮罩期间数据未发送"同时覆盖命令与协议。
+**锁态**：`asset` 协议不经过 `run_blocking` 的锁门禁。启动即锁定时 `App.vue` 的 `viewsReady` 不挂载路由视图，解锁后才挂载并取数（`viewEpoch` 同时重建），因此不再依赖"协议回 404"这条约束；换来的是三端 Range、MIME 与协议行为都由 Tauri 维护。
 
-**缩略图**：`media_import` 对图片产出长边 ≤512px 的 `.webp`，文件名取原 name 的 stem（`k3f9a1.png` → `.thumbs/k3f9a1.webp`），卡片请求 `ddasset://t/k3f9a1.webp`，换扩展名这件事只发生在 `asset-url.ts`。详情加载原图；音视频出图标 + 时长的卡片。
+**缩略图**：`media_import` 对图片产出长边 ≤512px 的 `.webp`，文件名取原 name 的 stem（`k3f9a1.png` → `.thumbs/k3f9a1.webp`），卡片请求 `assetUrl("t", …)`；缩略图加载失败回落到原图，再失败显示占位图标。详情加载原图；音视频出图标 + 时长的卡片。
 
-**卡片用哪张图**：`asset` 与 `journal` 保持零关联（PRD §2.4）。卡片取 `journal.asset_n` 与 `journal.cover_asset` 两个派生列，在 save 事务里和 `words`、派生 title 一起从正文扫出。两者归进同一个 `data_rebuild(what='assets')`，它同时完成全表比对的孤儿文件清理：正文出现过的 name 集合与 `asset` 表求差，多余文件删除。
+**未使用附件**：是否被使用只由文档内容判定——退出编辑器时撤销栈随之重置，删掉引用的文件已无法恢复，因此就在这一刻清理。`DetailView` 记两份名字：载入正文时的 `referencedAssetNames` 与本次 `media_import` 新增的 name；切换条目前与组件卸载前先冲刷保存，再用「载入 ∪ 新增 − 最终正文引用」得到待删名单，`asset_gc` 以 fire-and-forget 调用，失败只进控制台，不阻塞导航。`TodayCard` 的待发附件在点删除或卡片卸载时走同一条命令；已提交的附件不参与。不做全库引用扫描、不维护引用计数：回收站里的条目不会进入编辑会话，其附件自然不会被列入候选。Rust 侧只校验文件名合法（防路径穿越）并删除原图、缩略图与 `asset` 行；缩略图被同 stem 的其它附件共用时保留。
+
+**卡片用哪张图**：`asset` 与 `journal` 保持零关联（PRD §2.4）。卡片取 `journal.asset_n` / `audio_n` / `video_n` 三个分类计数与 `journal.cover_asset`，在 save 事务里和 `words`、派生 title 一起从正文按 `ddasset://{kind}/` 前缀扫出；正文变了它们就跟着变，没有额外的全表重建命令。
 
 ---
 
@@ -233,23 +233,23 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 **路由**：`vue-router`，4 条平铺路由 `/today`、`/discover`、`/me`、`/j/:id`。分界线一句话：**换"页"走路由，叠"层"走状态**——整月视图、附件大图、文件选择器、确认框都挂在组件局部状态上。移动端返回键接路由历史（Tauri 的 `on_back_pressed` → `router.back()`）。
 
-**桌面三栏落在同样 4 条路由上**：`/today` 在窄屏渲染【周条 + 今天卡片 + 当日列表】，在宽屏渲染同一组件树的【迷你月历｜列表｜详情】三块 `<section>`——两个分支共用一棵树、一份列表逻辑。详情栏两边都是 `/j/:id`，宽屏套在第三列（`<router-view v-slot>` + 一份 `keep-alive` 实例，滚动位置随之保留），窄屏独占整屏。**选中的那天写在 URL 上**（`/today?d=2026-11-21`）。`/me` 是 PRD §2.7 那张单页分组滚动页（profile + 统计卡 + 五组设置），`stats_overview` 与设置缓存只服务这一屏。
+**桌面三栏落在同样 4 条路由上**：`/today` 在窄屏渲染【周条 + 今天卡片 + 当日列表】，在宽屏渲染同一组件树的【迷你月历｜列表】两栏；屏幕到 1200 才加第三列，详情以 `DetailView` 的**内嵌态**（`entry-id` prop）挂在列表右侧，不切路由。选中日记日写在 `?d=`，选中的条目写在 `?e=`，刷新与前进后退都能还原；直接访问 `/j/:id`（搜索、深链）仍走整页路由。内嵌态复用同一份读写判定：日记今天直接编辑，历史日期只读，关闭时冲刷保存并从 query 里移除 `e`。`/me` 是 PRD §2.7 那张单页分组滚动页（profile + 统计卡 + 五组设置），`stats_overview` 与设置缓存只服务这一屏。
 
 **状态**：全局一个 Pinia store `session`，装两样东西——锁态、`Settings` 缓存。三条规则：
 
 - 服务端数据活在组件里：一个 20 行的 `useCollection()` 覆盖列表的 loading/分页/刷新，四个视图共用。
-- 能被 UI 派生的值一律由 Rust 算好返回（连续天数、卡片标题、周条打点）。
+- 能被 UI 派生的值一律由 Rust 算好返回（连续天数、卡片标题、周条打点）；唯一例外是"日记今天"与 24+ 时刻——它们只依赖时钟与设置，不进库，由 `utils/date.ts` 算（§2.1）。
 - 跨视图失效走事件：`journal_save` 成功后 Rust 广播 `dd://data-changed`，`TodayView` 与 `DetailView` 各自判断 payload 影响自己哪一块；列表按 `day_key` 精确重查一页。
 
 **全 App 同一时刻最多一个 Vditor 实例。** 由此定三件事：
 
 - **今天卡片是一块自动增高的 `<textarea>`**（§6.1），只在选中的是日记今天时挂载。正文存的就是 markdown 源，textarea 与 Vditor 读写同一份字符串；它不接 `useAutosave`，失焦或显式提交时整段写入。
 - 详情与整篇编辑才挂 `EditorPane`。桌面三栏里"今天卡片 + 详情编辑器"是 textarea 与 Vditor 并存，各管一个输入焦点。
-- `EditorPane` 卸载时调 `vditor.destroy()`；`DetailView` 在 `onDeactivated` 里只冲刷、保留实例，滚动位置与撤销栈随实例一起留住（PRD §2.1）。
+- `EditorPane` 卸载时调 `vditor.destroy()`；`DetailView` 以条目 id 为 key，切条目前先 `flushSave()`，再卸载旧实例、挂新实例（`?e=` 变化走同一条路径）。撤销栈不跨条目保留，滚动位置由每次加载时的 `scrollTop = 0` 重置。
 
 **当前日记与只读过去**：`session.settings.dayBoundaryMinutes` 是唯一输入，`utils/date.ts::diaryToday(boundary, now)` 与 Rust 的 `compute_day_key` 同式。`/today` 的 `selected` 缺省取它；`TodayCard` 只在 `selected === today` 时挂载；`DetailView` 加载时把 `day_key < diaryToday` 置为 `readOnly`，`persist()` 第一行短路，编辑入口（FAB / 顶栏铅笔 / 双击 / `E` / `?edit=1`）全部经过这一个布尔。新建路由 `/j/new` 不带日期，保存时用 `recordedAtNow()`，`day_key` 仍由 Rust 单向决定；空白草稿由 `persist()` 的 trim 检查挡在落库之前。
 
-**`EditorPane.vue`** 对外暴露 `modelValue`、`dirty`、`insertText(text)`、`renderSource`（"看源码"切换）、`revealRange(range)`（把 §6.3 的码点区间滚进视野并落光标）。Vditor 的 DOM 归 Vditor：编辑器内容单向流出，外部只在初始挂载与显式"看源码"切换两个时机写入，联动一律走事件回调。
+**`EditorPane.vue`** 对外暴露 `modelValue`、`dirty`、`insertText(text)`、`renderSource`（"看源码"切换）、`revealRange(range)`（把 §6.3 的码点区间滚进视野并落光标）。Vditor 的 DOM 归 Vditor：编辑器内容单向流出，外部只在初始挂载与显式"看源码"切换两个时机写入，联动一律走事件回调。Vditor 初始化会清空宿主元素的 `innerHTML`，因此它挂在内层专属容器 `.editor-body` 上，隐藏的 `<input type=file>`、拖入遮罩与插入提示都留在外层 `.editor`，由 Vue 独占。
 
 **标签与心情**（PRD §2.6）：一个弹层、两个入口。状态属于 `DetailView` 的 `MetaChips` 一份；编辑器工具栏的 `label` 按钮把同一个弹层定位到光标处唤起。
 
@@ -273,14 +273,14 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 **时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `day_key` 三个原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。修仙模式的 24+ 时刻也在前端算：本地墙钟早于分界点时，日期取前一天、小时 +24（`displayParts`），再交给格式串与 `Intl`。
 
-**断点**：`useBreakpoint` 用 `matchMedia` 订阅 `<600 / 600-960 / 960-1280 / >1280`，**只在档位变化时发布**，组件按 `isWide`/`isNarrow` 翻转重渲染。
+**断点**：`useBreakpoint` 用三组 `matchMedia` 订阅 `<600 / ≥960 / ≥1200`，**只在布尔翻转时发布**，组件按 `isNarrow`、`isWide`、`isThreePane` 切换。960 先出两栏（184 侧轨 + 日历 300 + 列表），1200 才出三栏（240 + 300 + 420）；理由见 [UI.md §2](./UI.md)。
 
 ---
 
 ## 6. 关键流程
 
 **6.1 记一条（今天卡片）**
-`TodayCard` 是一块自动增高的 `<textarea>`（1 → 6 行后内部滚动），实例配额留给详情（§5），并且只在选中的是日记今天时挂载。提交走三个时机——失焦 / `Ctrl/⌘+Enter` / "保存"按钮——`trim` 为空时直接返回，不产生空条目。否则 `journal_save(id=null, recordedAt=now, recordedOff=local)` → Rust 按当前分界点算 `day_key` → 广播 `data-changed` → 卡片清空、高度复位 → 列表重查并停在今天。**它不走去抖自动保存**：这是"写一条就走"的快速入口，不是详情编辑器（PRD §2.8）。粘贴/拖入图片与"展开到详情"两种附加动作随 M2 的附件一起排（PRD §8）。**卡片与当日列表是两条独立记录**：卡片是草稿式快速入口，写下第一条后它落到列表里、卡片回到空态（PRD §3 的"0 跳页"）。
+`TodayCard` 是一块自动增高的 `<textarea>`（1 → 6 行后内部滚动），实例配额留给详情（§5），并且只在选中的是日记今天时挂载。提交走两个时机——失焦 / "保存"按钮——`trim` 为空且没有附件时直接返回，不产生空条目。否则 `journal_save(id=null, recordedAt=now, recordedOff=local)` → Rust 按当前分界点算 `day_key` → 广播 `data-changed` → 卡片清空、高度复位 → 列表重查并停在今天。**它不走去抖自动保存**：这是"写一条就走"的快速入口，不是详情编辑器（PRD §2.8）。粘贴、拖入与文件选择都接到同一条 `media_import` 管线（§7 第 2 条），附件先排成待发条，提交时把 `ddasset://` 引用追加到正文末尾；只有附件也能保存（UI.md §3.9）。待发附件被移除或卡片卸载时，删除引用已不存在的那部分文件（§3.1）。**卡片与当日列表是两条独立记录**：卡片是草稿式快速入口，写下第一条后它落到列表里、卡片回到空态（PRD §3 的"0 跳页"）。
 
 **6.2 周条打点**
 `day_marks(from, to)` 只读 `day_mark` 的主键区间，一次查询覆盖 7 天；切月查月区间。周条与整月共用 `useDayMarks(month)`，切月才失效。
@@ -293,17 +293,25 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 其余                                       → 有界 LIKE：按 filters 收窄 day_key 区间，LIMIT 200，partial = true
 ```
 
-`partial` 一路传到 UI 文案（UI.md §3.6）。查询永远 `JOIN journal USING(rowid) WHERE deleted_at IS NULL AND (sensitive=0 OR :show_sensitive)`。返回的 `SearchPage.items` 带 `ranges`，点条目进 `DetailView` 后 `revealRange(first)` 定位。**命中位置一律由 Rust 算**，偏移单位是 Unicode 码点（`&str[..pos].chars().count()` 把 FTS 的字节偏移转过来），`ranges` 直接喂给 `Range.setStart(node, offset)`。
+`partial` 一路传到 UI 文案（UI.md §3.11）。查询永远 `JOIN journal USING(rowid) WHERE deleted_at IS NULL AND (sensitive=0 OR :show_sensitive)`。返回的 `SearchPage.items` 带 `ranges`（命中码点区间，供将来使用，当前前端未消费）；点条目进 `DetailView` 时带 `?q=`，详情渲染完成后由前端自行定位并高亮。
 
-**文内查找与全局搜索共用 `FindBar.vue`**（PRD §2.5），两者差别只在回车之后做什么。详情内的高亮用 CSS Custom Highlight API（`CSS.highlights.set(new Highlight(...ranges))` + `::highlight(dd-hit)`）：高亮只存在于 `CSS.highlights` 集合里，编辑器源文本与 DOM 保持原样。上下键由 `useFind` 维护游标，每步调 `revealRange`；计数取 `search_locate` 回的 `total`。该 API 的可用性由 V-5 验，退化画法在 UI.md §3.6。
+**搜索跳转高亮**（纯前端，M2 起替代文内查找）：`DetailView` 在预览渲染后按 `?q=` 用 `TreeWalker` 把命中文字包进 `<mark class="dd-hit">`（上限 200 处），再把第一处 `scrollIntoView({block:'center'})`。因此不依赖 `search_locate`，也不改编辑器源文本；不提供查找条、`n/N` 计数或快捷键，编辑态不出现任何标记。代价是超长文只标前 200 处，与有界 LIKE 是同一个取舍。全局搜索仍走 `search_query`。
 
 **6.4 导出人可读目录**
-只读连接流式取全部存活条目 → 写临时目录 `cache/export-<ts>/`：每条 `<day_key>-<id>.md`（front-matter：`id / recorded_at / offset / format / mood / pinned / sensitive / tags / words`；正文只做一件事——把 `ddasset://{kind}/{name}` 换成相对路径 `assets/{name}`，其余字节照抄）+ 附件复制到 `assets/` 子目录（`.thumbs/` 留在原地，导出的是原图）→ 每 20 条 emit 一次进度 → 完成后原子改名到目标。Android 侧走 SAF 返回的 URI 流，改名交还给平台：先写临时文件、flush、关闭，失败时清理，并在 `DataInfo` 里标注这条路径的能力。
+取全部存活条目 → 在用户选择的目录下新建 `Diary2Day-<ts>/`：每条 `<day_key>-<id>.md`（front-matter：`id / recorded_at / offset / format / mood / pinned / sensitive / tags / words`；正文只做一件事——把 `ddasset://{kind}/{name}` 换成相对路径 `assets/{name}`，其余字节照抄）+ 附件按需复制到 `assets/` 子目录（`.thumbs/` 留在原地，导出的是原图）→ 每 20 条 emit 一次进度。移动端暂未接 SAF，目录入口只在桌面 `plugin-dialog` 出现。
 **文件名带 id** 保证导入对称：`md_doc.rs` 同一份 front-matter 读写 + 路径双向映射被 export 和 import 共用，重复导入同一目录按 `id` upsert。测试判据："导出 → 导入 → 导出，目录内容逐字节相等（除 `updated_at`）"。
 
 **6.5 备份 / 恢复 / 锁**
-备份 = 写连接 `VACUUM INTO 'cache/backup/live.db'` + assets + `manifest.json{app_version, schema_version, counts, created_at, media_included}` → zip。恢复 = 校验 manifest（`schema_version` 高于当前 → `restore_version_mismatch`，提示先升级应用）→ 快照当前库 → 替换 → 关闭并重开连接 → 广播 `all` 失效。
-锁 = Rust 监听 `WindowEvent::Focused(false)` 起计时（`lock_leave_delay_s`），到点置锁态并 emit；移动端对应 Tauri 的 lifecycle 事件；`dd://lock-state` 决定前端遮罩。**遮罩的实质是数据停止发送**：判定在 Rust，锁态期间命令与 §3.1 协议同时返回 404，前端手上持有的正文字节数保持为零。
+备份 = `VACUUM INTO 'cache/backup/live.db'` + assets + `manifest.json{app_version, schema_version, counts, created_at, media_included}` → zip。恢复 = 校验 manifest（`schema_version` 高于当前 → `restore_version_mismatch`，提示先升级应用）→ 解包到 `cache/restore/` → checkpoint 后用占位连接换出旧库、复制新库并重开迁移 → 从新库重载 `app_lock` 运行时并 emit `dd://lock-state` → 广播 `all` 失效。恢复是整库替换，没有 merge 策略。
+锁 = 口令经 SHA-256(`salt:code`) 存 `app_lock` 单行表，前端 `LockOverlay` 与 Rust 门禁双保险：锁态期间 `run_blocking` 直接返回 `locked`；前端监听 `window blur` / `visibilitychange` 起 `lockLeaveDelayS` 计时（0 表示从不），到点调 `app_lock_engage`。设置与锁状态查询走 `run_blocking_public`，保证锁屏也能渲染主题；`asset_paths` 同样公开（只返回目录路径）。启动即锁定时 `App.vue` 的 `viewsReady` 拦住路由视图挂载，第一次解锁后才挂载并取数；解锁时再递增 `viewEpoch` 强制重建，运行时加锁则保留视图、只盖遮罩。`asset` 协议本身不参与锁门禁（§3.1）。明确告诉用户这是 UI 门，文件不加密。
+
+**6.6 分享接收（Android）**
+
+Android 的 `MainActivity` 在 `onCreate` / `onNewIntent` 处理 `ACTION_SEND` 与 `ACTION_SEND_MULTIPLE`：文本取 `EXTRA_TEXT`，文件取 `EXTRA_STREAM`（缺失时回退 `clipData`），逐个把 `content://` 流复制到 `cache/share-inbox/<uuid>.<ext>`（单文件 64 MB 上限），再把 `{text, files:[{path,name,mime}]}` 追加进同目录的 `pending.json`（先写 `pending.tmp` 再 rename，避免读到半截 JSON）。`AndroidManifest.xml` 为 `text/plain`、`image/*`、`audio/*`、`video/*` 声明 SEND / SEND_MULTIPLE intent-filter；`launchMode=singleTask` 让热启动走 `onNewIntent`。收件箱落在 Tauri 的 `app_data_dir/cache`（Android 上即 `activity.cacheDir`），与 `AppPaths.cache_dir` 同一路径。
+
+Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须仍在 `share-inbox` 内，字节交给 `assets::import_bytes`（与 `media_import` 共用扩展名/嗅探/缩略图管线），正文 = 各段文本 + 附件 markdown（`![](ddasset://image/…)`、`<audio|video controls …>`），再调 `journal::save` 生成新条目（`recorded_at=now`，分界点照常生效）；成功后删除 `pending.json` 与被引用的缓存文件。JSON 解析失败把文件改名为 `pending.bad.json` 留证，避免轮询死循环；锁态下命令返回 `locked`，收件箱原样保留。
+
+前端不引入原生插件桥：`App.vue` 在挂载、窗口聚焦、`visibilitychange` 可见、解锁，以及 Android 前台每 1.5s 调一次 `share_drain`；拿到 `id` 就 `router.push('/j/:id')` 打开新条目。桌面同样调用，只是收件箱通常为空。
 
 ---
 
@@ -312,7 +320,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 参考项目 140 行 JS 里绝大部分是在给 Vditor 擦屁股，四条直接搬：
 
 1. **工具栏抢焦点**：`toolbar.onmousedown = e => e.preventDefault()`，需要真正触发 click 的按钮加白名单 class。效果是移动端点工具栏时键盘保持展开。
-2. **上传劫持**：Vditor 自带 upload 走 HTTP，本项目改用隐藏 `<input type=file>` + `files` 拷贝 + `dispatchEvent('change')`，把选择动作接到应用侧，再喂给 `media_import`，拿回来的 `Asset.name` 拼成 `ddasset://image/{name}` 插进正文（§3.1）。`upload.enable` 保持 `false`，图片插入走 IR 模式自己的路径。
+2. **上传劫持**：不用 Vditor 自带的 upload（`cdn` 之外的 HTTP 端点），也不配 `upload` 选项。工具栏里加一个自定义按钮 `dd-image`，`click` 直接点隐藏的 `<input type=file accept="image/*,audio/*,video/*" multiple>`；`paste`（捕获阶段，先于 Vditor）与 `dragover/drop` 也挂在编辑器宿主上。文件读成 data URL 交给 `media_import`，拿回来的 `Asset.name` 拼成逻辑 URL `ddasset://{kind}/{name}`，插入前经 `expandAssetUrls` 展开，用 `editor.insertValue()` 插进正文（§3.1）。`ingest` 一进入就把 `busy` 置真并在编辑器底部显示软提示（按类型取"正在插入图片/视频/音频…"，混合时为"正在插入音频或视频…"），成功与失败都在 `finally` 里撤掉；失败时同一位置保留 `describeError` 的详情 pill，正文不动。今日卡片走同一份 `utils/media.ts`，只是附件先排队不插正文（UI.md §3.9）。导入成功的 name 通过 `assets-imported` 事件交给 `DetailView`，作为退出时清理未使用附件的一半依据（§3.1）。
 3. **光标恢复**：编辑态与只读态来回切时，从 `vditor[vditor.currentMode].range` 取回选区再 `addRange`，点击后光标停在用户点的位置。
 4. **大纲（TOC）**：`.vditor-outline__content` 在窄屏不可用，克隆到自己的抽屉里。大纲排期在 M3。
 
@@ -326,20 +334,20 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 ## 8. 依赖
 
-**Rust**：`tauri@2`、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset) + `iana-time-zone`(启动时读一次本地偏移)、`tokio`(随 tauri)、`thiserror`、`zip`、`pbkdf2`+`sha2`(锁口令)、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 只开 `jpeg`/`png`/`webp`，出缩略图用)、`ts-rs`(dev)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
+**Rust**：`tauri@2` + `tauri-plugin-dialog` / `tauri-plugin-opener`、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset，本地偏移取 `chrono::Local`)、`base64`（`media_import` 与游标）、`tokio`(随 tauri)、`sha2`(锁口令，SHA-256)、`zip`、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 开 `jpeg`/`png`/`webp`/`gif`/`bmp`，出缩略图用)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
 
-**前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`@panzoom/panzoom`(附件缩放)、`vite`、`typescript`、`vitest`(composable)。月历与格子规格在 UI.md §3.2，自己实现；日期显示走 `Intl`（§5）。
+**前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`vite`、`typescript`。月历与格子规格在 UI.md §3.2，自己实现；附件缩放（UI.md §3.10）用 pointer 事件与 `transform` 写在 `AssetViewer.vue` 里，不引 panzoom；日期显示走 `Intl`（§5）。
 
-CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo run --bin export-types && git diff --exit-code src/ipc/bindings`、`vue-tsc --noEmit`、`vitest run`、`node scripts/check-style.mjs`。三平台 matrix 跑构建，测试全在 ubuntu runner 跑一遍。
+CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`npm run build`（内部即 `vue-tsc --noEmit` + `vite build`）。计划中但尚未接线的：`ts-rs` 生成物 diff 校验、`vitest run`、`node scripts/check-style.mjs`；三平台 matrix 跑构建，测试全在 ubuntu runner 跑一遍。
 
-`check-style.mjs` 约 30 行正则扫 `.vue` 与 `.css` 源文件，拦 UI.md §7 的三条禁忌：组件里出现十六进制色值、出现五档之外的 `font-size`、`!important` 出现在 `vditor-override.css` 之外。
+`check-style.mjs`（约 30 行正则扫 `.vue` 与 `.css`）是计划项，拦 UI.md §7 的三条禁忌：组件里出现十六进制色值、出现五档之外的 `font-size`、`!important` 出现在 `vditor-override.css` 之外。脚本落地前靠 review 守这三条。
 
 ---
 
 ## 9. 要改的脚手架配置
 
-1. `tauri.conf.json`：`app.security.csp` 显式写出，并把自定义协议列进去——`default-src 'self'`、`img-src 'self' ddasset: data:`、`style-src 'self' 'unsafe-inline'`、`media-src 'self' ddasset:`。Android/iOS 上 Tauri 把自定义协议映射成 `http://ddasset.localhost`，V-2 确认两种写法是否需要并列。
-2. `capabilities/default.json`：权限清单只列 `dialog:allow-open`、`dialog:allow-save`、`opener:default`。文件能力由 Rust 命令承担，WebView 保持零文件系统权限。
+1. `tauri.conf.json`：`app.security.assetProtocol` 已开启（`enable: true`，scope 运行时收窄）。将来显式写 `app.security.csp` 时，要给附件通道留口——`img-src 'self' asset: http://asset.localhost data:`、`media-src 'self' asset: http://asset.localhost`，两种写法并列覆盖 Windows/Android 与其它平台。
+2. `capabilities/default.json`：权限清单只列 `core:default`、`dialog:default`、`opener:default`。文件能力由 Rust 命令承担，WebView 保持零文件系统权限。
 3. 窗口配置：移动端安全区、桌面最小尺寸；现有 800×600 固定尺寸在手机上会退化。
 4. `clippy.toml`：`unwrap_used`/`expect_used` 设为 `deny`，对应 §4 的 `panic = "abort"` 约束。
 5. `tauri-plugin-dialog`（另存为/打开目录）要动三处：`Cargo.toml`、`tauri.conf.json`、`capabilities`。
@@ -355,13 +363,13 @@ CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo ru
 - `md_doc`：随机生成 100 条含全字段与 `ddasset://` 引用的日记 → export → import → export → 比较。
 - `trash`：注入假时钟，检查过期集合与保留期边界。
 - `name_key`：全角/半角、大小写、尾空格折叠后视为同名。
-- `asset_name`：协议 URL → 路径解析，`..`、绝对路径、`%2e%2e`、`t` 之外的 kind、双扩展名五类输入各返回拒绝（§3.1）。
+- `assetUrl`：逻辑 URL ↔ 物理 URL 往返（Windows `%5C` 编码、其它平台 `/`、括号编码、`.thumbs` 不参与折叠），scope 外与不存在的文件在手动回归里确认 403/404（§3.1）。
 
 `db/` 用真实临时库（`Connection::open_in_memory` + 跑迁移）：
 
 - 迁移：逐版本 up，中途注入失败后 rollback 的完整性。
-- 派生数据：随机 1000 次 save/delete/purge 后，`day_mark` 与 `asset_n`/`cover_asset` 必须与 `data_rebuild` 的全量结果逐行相等（PRD §6 第 3 条的防线）。
-- 分界点重排：在 17:30Z/+480 存一条落在明天，改 `dayBoundaryMinutes=240` 后同一条落回今天；`day_mark`、列表与回收站同步；改回 0 后归属复原。
+- 派生数据：随机 1000 次 save/delete/purge 后，`day_mark` 与 `asset_n`/`audio_n`/`video_n`/`cover_asset` 必须与 `data_rebuild` 的全量结果逐行相等（PRD §6 第 3 条的防线）。
+- 分界点重排：在 17:30Z/+480 存一条（归属次日），改 `dayBoundaryMinutes=240` 后同一条归属到前一日；`day_mark`、列表与回收站同步；改回 0 后归属复原。
 - `search`：三字符走 FTS、单/双字符走兜底且 `partial=true`、结果集只含存活条目、`sensitive` 仅在解锁态参与、码点偏移与 `chars()` 计数一致。
 - `journal_save` 并发：去抖到点与显式冲刷同时提交 → 一次成功写入，另一次得到 `bad_revision` 并被上层丢弃。
 
@@ -374,10 +382,10 @@ CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo ru
 | # | 验什么 | 受阻时的退路 |
 |---|---|---|
 | V-1 | 打包的 SQLite 是否开 FTS5 且 ≥3.34（`trigram`） | 走有界 `LIKE`（`partial` 恒 true），后续加索引即可。策略选择已在 Rust 内部（§6.3），前端零改动 |
-| V-2 | §3.1 的 `ddasset:` 协议在 Android/iOS WebView 下能否出图、视频 Range 拖动是否可用、CSP 该写 `ddasset:` 还是 `http://ddasset.localhost` | 图片改走内置 `asset:` 协议 + `convertFileSrc`（配一份 scope）；音视频走 `blob:` 或本地回环服务。三种方案共用同一个 IPC 面 |
+| V-2 | ~~自定义协议在 Windows/Android WebView 下 404、Range 能否拖动~~ **已定案**：图片与音视频统一走内置 `asset` 协议 + `convertFileSrc`，scope 收窄到 `assets_dir`；原 `ddasset` 自定义协议已删除。剩余待验：Android WebView 下 `http://asset.localhost` 出图与视频拖动 | 若 Android 仍不可用，再考虑 `blob:` 或本地回环服务；逻辑 URL 与前端映射层不变，只替换 `assetUrl.ts` 的物理 URL 生成 |
 | V-3 | Vditor 在 WKWebView / Android WebView 上的四条补丁（§7）能否照搬生效，以及 `:where()` 零特异度盖得住它自带的选择器。最早验 | 换 CodeMirror 源码态，"详情即编辑"降级到 M2；样式盖得勉强就加特异度，仍然集中在同一个 override 文件里 |
 | V-4 | `Mutex<Connection>` + `spawn_blocking` 下，导出 2GB 附件目录时 UI 读写是否仍顺 | 已按第二只读连接设计（§4）；若仍卡顿，导出改成分片让出连接（每 50 条重新取锁） |
-| V-5 | CSS Custom Highlight API（`CSS.highlights` / `::highlight()`）在两个 WebView 上可用（§6.3） | 走 UI.md §3.6 的退化画法（覆盖块只标当前命中）。列表侧高亮走自有模板 |
+| V-5 | ~~CSS Custom Highlight API 可用性~~ **已绕开**：搜索跳转高亮用 DOM `<mark>`（§6.3），两个 WebView 都不需要验它 | 若将来要"零 DOM 改动"的高亮，再回到 `CSS.highlights` / `::highlight()` |
 
 ---
 
@@ -396,7 +404,8 @@ CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo ru
 | TanStack Query | `useCollection()`（20 行）+ `dd://data-changed` 事件驱动失效 | 视图数超过 8 个或出现跨页缓存共享 |
 | Tailwind/UnoCSS、VueUse、`vue-i18n`、`dayjs`/`date-fns`、日历与图标字体、连接池以外的 UI 库 | UI.md 的 token + 手写月历 + `@mdi/js` 常量 + `Intl` + 100 行 `t()` | token 体系撑不住多主题时；语言数超过 4 种时 |
 | 图片压缩、转码、EXIF 清理、视频首帧图 | §3.1 那张缩略图是唯一加工 | 用户真实反馈原图过大时，且届时要给导出留"存原图"开关 |
-| 附件与日记的关联表、引用计数、媒体库、"清理未使用文件"按钮 | 正文里的 URL + 两个派生列 + `data_rebuild(assets)` 顺带清孤儿 | 附件量级大到必须整理时（PRD §2.4 的只读画廊视图） |
+| 附件与日记的关联表、引用计数、媒体库、"清理未使用文件"按钮 | 正文里的 URL + 两个派生列；退出编辑时按文档内容差集调用 `asset_gc`，后台删除未引用文件（§3.1） | 附件量级大到必须整理时（PRD §2.4 的只读画廊视图） |
 | 组件快照测试、覆盖率指标 | §10 那三类：天归属、往返等价、派生一致性；视觉走 UI.md §7 手工清单 | 有第二个 contributor 接手时 |
+| 向历史/未来日期补写、给旧日记改日期 | 写入只发生在当前日记日，旧日记只读（PRD §2.8） | 用户明确要求补记，且能给出不破坏时间线的交互时 |
 | 冲突三选框（本地/远端/合并） | `bad_revision` 一律"丢弃本次，以最后一次冲刷为准" | 出现多设备同步（PRD §4 已排除） |
 | 双 DOM 并存 + CSS `hidden-*` 断点方案（参考项目） | `useBreakpoint` 档位变化 + 组件按 `isWide` 分支渲染 | 无 |

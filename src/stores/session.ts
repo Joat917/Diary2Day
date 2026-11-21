@@ -42,7 +42,8 @@ export const useSession = defineStore("session", () => {
   async function load() {
     try {
       settings.value = await settingsGetAll();
-    } catch {
+    } catch (error) {
+      console.error("[session] settings load failed", error);
       settings.value = { ...defaults };
     } finally {
       ready.value = true;
