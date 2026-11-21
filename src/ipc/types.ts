@@ -84,6 +84,7 @@ export interface DataInfo {
   db_size: number;
   assets_size: number;
   counts: Counts;
+  mobile: boolean;
 }
 
 export interface DataChanged {
@@ -122,6 +123,10 @@ export interface ImportReport {
 export interface BackupReport {
   path: string;
   size: number;
+}
+
+export interface PickedBackup {
+  path: string;
 }
 
 export interface ShareReport {

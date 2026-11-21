@@ -226,6 +226,7 @@ const previewParts = computed(() => {
 .meta {
   margin-top: var(--s-2);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
   font-size: var(--t-caption);

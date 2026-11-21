@@ -12,9 +12,12 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_android_fs::init());
+    builder
         .setup(|app| {
             let state = state::AppState::init(app.handle())?;
             app.asset_protocol_scope()
@@ -51,6 +54,16 @@ pub fn run() {
             commands::data::data_import_md,
             commands::data::data_backup,
             commands::data::data_restore,
+            #[cfg(target_os = "android")]
+            commands::android_data::data_export_android,
+            #[cfg(target_os = "android")]
+            commands::android_data::data_import_android,
+            #[cfg(target_os = "android")]
+            commands::android_data::data_backup_android,
+            #[cfg(target_os = "android")]
+            commands::android_data::data_pick_restore_android,
+            #[cfg(target_os = "android")]
+            commands::android_data::data_restore_android,
             commands::lock::app_lock_status,
             commands::lock::app_lock_set,
             commands::lock::app_lock_clear,

@@ -158,7 +158,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey, true));
 .toolbar {
   position: absolute;
   inset-inline-end: var(--s-4);
-  bottom: calc(var(--s-4) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--s-4) + var(--safe-bottom));
   display: flex;
   align-items: center;
   gap: var(--s-1);
@@ -194,7 +194,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey, true));
 .hint {
   position: absolute;
   inset-inline-start: 50%;
-  bottom: calc(var(--s-4) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--s-4) + var(--safe-bottom));
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.66);
   font-size: var(--t-caption);

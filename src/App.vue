@@ -4,6 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { mdiAccountCircleOutline, mdiCalendarToday, mdiMagnify } from "@mdi/js";
 import { useBreakpoint } from "./composables/useBreakpoint";
 import { t, type MessageKey } from "./i18n";
+import { version as appVersion } from "../package.json";
 import { isTauri, shareDrain } from "./ipc/client";
 import { useLock } from "./stores/lock";
 import { useSession } from "./stores/session";
@@ -124,7 +125,7 @@ const activeIndex = computed(() =>
           <span>{{ t(item.label) }}</span>
         </RouterLink>
       </nav>
-      <div class="rail-foot">M2 · 0.1.0</div>
+      <div class="rail-foot">M2 · {{ appVersion }}</div>
     </aside>
 
     <main class="content" :class="{ broad }">
@@ -163,6 +164,7 @@ const activeIndex = computed(() =>
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  padding-top: var(--safe-top);
   background: var(--c-surface);
 }
 
@@ -252,8 +254,8 @@ const activeIndex = computed(() =>
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  height: calc(var(--nav-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
   border-top: 1px solid var(--c-hairline);
   background: var(--c-surface-1);
   flex: none;

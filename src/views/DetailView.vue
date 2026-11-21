@@ -727,7 +727,7 @@ watch(
 .fab {
   position: fixed;
   inset-inline-end: var(--s-4);
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + var(--s-4));
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-4));
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);

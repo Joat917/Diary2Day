@@ -13,10 +13,15 @@ import {
 } from "@mdi/js";
 import {
   dataBackup,
+  dataBackupAndroid,
+  dataExportAndroid,
   dataExportDir,
+  dataImportAndroid,
   dataImportMd,
   dataInfo,
+  dataPickRestoreAndroid,
   dataRestore,
+  dataRestoreAndroid,
   describeError,
   journalEmptyTrash,
   journalPurge,
@@ -28,6 +33,7 @@ import {
 } from "../ipc/client";
 import type { DataInfo, JournalSummary, OpProgress, Theme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
+import { version as appVersion } from "../../package.json";
 import { useLock } from "../stores/lock";
 import { useSession } from "../stores/session";
 import {
@@ -44,6 +50,7 @@ import StateBlock from "../components/StateBlock.vue";
 const session = useSession();
 const lock = useLock();
 const info = ref<DataInfo | null>(null);
+const mobile = computed(() => info.value?.mobile === true);
 const trash = ref<JournalSummary[]>([]);
 const trashLoading = ref(true);
 const trashError = ref<string | null>(null);
@@ -186,6 +193,14 @@ async function runOp(label: string, task: () => Promise<void>) {
 
 async function exportEntries() {
   if (opBusy.value) return;
+  if (mobile.value) {
+    await runOp(t("me.export"), async () => {
+      const report = await dataExportAndroid();
+      if (!report) return;
+      notice.value = t("me.exportDone", { n: report.journals, dir: report.dir });
+    });
+    return;
+  }
   const target = await openDialog({
     directory: true,
     multiple: false,
@@ -200,6 +215,15 @@ async function exportEntries() {
 
 async function importEntries() {
   if (opBusy.value) return;
+  if (mobile.value) {
+    await runOp(t("me.import"), async () => {
+      const report = await dataImportAndroid();
+      if (!report) return;
+      notice.value = t("me.importDone", { n: report.journals });
+      await Promise.all([loadInfo(), loadTrash()]);
+    });
+    return;
+  }
   const source = await openDialog({
     directory: true,
     multiple: false,
@@ -215,6 +239,14 @@ async function importEntries() {
 
 async function backupData() {
   if (opBusy.value) return;
+  if (mobile.value) {
+    await runOp(t("me.backup"), async () => {
+      const report = await dataBackupAndroid();
+      if (!report) return;
+      notice.value = t("me.backupDone", { size: formatBytes(report.size) });
+    });
+    return;
+  }
   const target = await saveDialog({
     title: t("me.backup"),
     defaultPath: "Diary2Day-Backup.zip",
@@ -229,6 +261,16 @@ async function backupData() {
 
 async function pickRestore() {
   if (opBusy.value) return;
+  if (mobile.value) {
+    try {
+      const picked = await dataPickRestoreAndroid();
+      if (!picked) return;
+      pending.value = { kind: "restore", path: picked.path };
+    } catch (err) {
+      opError.value = describeError(err);
+    }
+    return;
+  }
   const source = await openDialog({
     multiple: false,
     title: t("me.restore"),
@@ -296,7 +338,7 @@ async function runPending() {
   if (!action) return;
   if (action.kind === "restore") {
     await runOp(t("me.restore"), async () => {
-      const report = await dataRestore(action.path);
+      const report = mobile.value ? await dataRestoreAndroid(action.path) : await dataRestore(action.path);
       notice.value = t("me.restoreDone", { n: report.journals });
       await Promise.all([session.load(), lock.load()]);
       await Promise.all([loadInfo(), loadTrash()]);
@@ -507,7 +549,7 @@ onBeforeUnmount(() => {
       <section class="group">
         <h2 class="group-title">{{ t("me.data") }}</h2>
         <div class="rows">
-          <div class="row stack">
+          <div v-if="info && !mobile" class="row stack">
             <span class="label">{{ t("me.dataDir") }}</span>
             <code class="path">{{ info?.data_dir ?? "—" }}</code>
           </div>
@@ -526,7 +568,7 @@ onBeforeUnmount(() => {
               words: info.counts.words,
             }) }}</span>
           </div>
-          <div class="row">
+          <div v-if="info && !mobile" class="row">
             <button class="text-btn" type="button" @click="openFolder">
               <Icon :path="mdiFolderOpenOutline" :size="18" />
               {{ t("me.openDataDir") }}
@@ -660,7 +702,7 @@ onBeforeUnmount(() => {
         <h2 class="group-title">{{ t("me.about") }}</h2>
         <div class="rows">
           <div class="row">
-            <span class="value">{{ t("me.version") }}</span>
+            <span class="value">{{ t("me.version", { version: appVersion }) }}</span>
           </div>
           <StateBlock
             v-if="failure"

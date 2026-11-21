@@ -5,7 +5,11 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Parcelable
 import android.provider.OpenableColumns
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -16,11 +20,55 @@ private const val MAX_SHARE_BYTES = 64L * 1024 * 1024
 
 class MainActivity : TauriActivity() {
   private val shareQueue = Executors.newSingleThreadExecutor()
+  @Volatile private var insetTopDp = 0f
+  @Volatile private var insetBottomDp = 0f
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     enqueueShare(intent)
+  }
+
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    webView.addJavascriptInterface(InsetsBridge(), "ddInsets")
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
+      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+      )
+      pushInsets(webView, bars.top, bars.bottom)
+      insets
+    }
+    webView.post {
+      val insets = ViewCompat.getRootWindowInsets(webView)
+      if (insets != null) {
+        val bars = insets.getInsets(
+          WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+        )
+        pushInsets(webView, bars.top, bars.bottom)
+      }
+      ViewCompat.requestApplyInsets(webView)
+    }
+  }
+
+  private fun pushInsets(webView: WebView, topPx: Int, bottomPx: Int) {
+    val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+    val top = topPx / density
+    val bottom = bottomPx / density
+    if (top == insetTopDp && bottom == insetBottomDp) return
+    insetTopDp = top
+    insetBottomDp = bottom
+    webView.post {
+      webView.evaluateJavascript(
+        "window.ddApplyInsets && window.ddApplyInsets($top, $bottom)",
+        null,
+      )
+    }
+  }
+
+  private inner class InsetsBridge {
+    @JavascriptInterface
+    fun read(): String = "$insetTopDp,$insetBottomDp"
   }
 
   override fun onNewIntent(intent: Intent) {

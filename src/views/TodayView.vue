@@ -410,7 +410,7 @@ onBeforeUnmount(() => {
 .fab {
   position: fixed;
   inset-inline-end: var(--s-4);
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + var(--s-4));
+  bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-4));
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);
@@ -466,7 +466,7 @@ onBeforeUnmount(() => {
   margin-inline: auto;
   overflow-y: auto;
   padding: var(--s-2) var(--s-3) var(--s-3);
-  padding-top: calc(var(--s-2) + env(safe-area-inset-top, 0px));
+  padding-top: calc(var(--s-2) + var(--safe-top));
   background: var(--c-surface-1);
   border: 1px solid var(--c-hairline);
   border-top: none;
@@ -542,6 +542,7 @@ onBeforeUnmount(() => {
 .scroll {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
   padding-bottom: 96px;
@@ -556,6 +557,7 @@ onBeforeUnmount(() => {
 .day-stack {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .day-stack > .day-list {
@@ -566,6 +568,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
+  min-width: 0;
   padding: 0 var(--s-4);
 }
 

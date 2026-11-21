@@ -38,6 +38,7 @@ pub struct DataInfo {
     pub db_size: u64,
     pub assets_size: u64,
     pub counts: Counts,
+    pub mobile: bool,
 }
 
 #[tauri::command]
@@ -88,6 +89,7 @@ pub async fn data_info(state: State<'_, AppState>) -> Result<DataInfo, AppError>
             db_size,
             assets_size,
             counts,
+            mobile,
         })
     })
     .await

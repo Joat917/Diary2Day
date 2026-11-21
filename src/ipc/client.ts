@@ -14,6 +14,7 @@ import type {
   JournalPage,
   LockState,
   OpProgress,
+  PickedBackup,
   SearchPage,
   Settings,
   ShareReport,
@@ -202,6 +203,26 @@ export function dataBackup(target: string): Promise<BackupReport> {
 
 export function dataRestore(path: string): Promise<ImportReport> {
   return call("data_restore", { path });
+}
+
+export function dataExportAndroid(): Promise<ExportReport | null> {
+  return call("data_export_android");
+}
+
+export function dataImportAndroid(): Promise<ImportReport | null> {
+  return call("data_import_android");
+}
+
+export function dataBackupAndroid(): Promise<BackupReport | null> {
+  return call("data_backup_android");
+}
+
+export function dataPickRestoreAndroid(): Promise<PickedBackup | null> {
+  return call("data_pick_restore_android");
+}
+
+export function dataRestoreAndroid(path: string): Promise<ImportReport> {
+  return call("data_restore_android", { path });
 }
 
 export function appLockStatus(): Promise<LockState> {
