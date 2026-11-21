@@ -4,10 +4,9 @@ import { mdiCheck, mdiSend } from "@mdi/js";
 import { journalSave } from "../ipc/client";
 import type { Journal } from "../ipc/types";
 import { t } from "../i18n";
-import { recordedAtForDay, todayKey } from "../utils/date";
+import { recordedAtNow } from "../utils/date";
 import Icon from "./Icon.vue";
 
-const props = defineProps<{ dayKey: string }>();
 const emit = defineEmits<{ saved: [journal: Journal] }>();
 
 const text = ref("");
@@ -30,7 +29,7 @@ async function save() {
   if (!canSave.value) return;
   status.value = "saving";
   try {
-    const stamp = recordedAtForDay(props.dayKey);
+    const stamp = recordedAtNow();
     const journal = await journalSave({
       content: text.value,
       recordedAt: stamp.recordedAt,
@@ -57,12 +56,6 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-function focus() {
-  textarea.value?.focus();
-}
-
-defineExpose({ focus });
-
 onBeforeUnmount(() => window.clearTimeout(resetTimer));
 </script>
 
@@ -73,7 +66,7 @@ onBeforeUnmount(() => window.clearTimeout(resetTimer));
       v-model="text"
       class="input"
       rows="1"
-      :placeholder="props.dayKey === todayKey() ? t('today.placeholder') : t('today.emptyAction') + '…'"
+      :placeholder="t('today.placeholder')"
       @input="resize"
       @blur="save"
       @keydown="onKeydown"

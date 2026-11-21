@@ -275,6 +275,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 0 var(--s-4) var(--s-6);
 }
 

@@ -57,6 +57,7 @@ src/
                     EditorPane MetaChips FindBar FilterBar AssetViewer
                     Icon StateBlock（空态/加载/错误共用一个，UI.md §3.7）
   composables/      useAutosave useBreakpoint useDayMarks useSettings useFind useCollection
+  utils/date.ts     前端日记日：diaryToday / diaryDayKey / 24+ 时刻（与 Rust 同式，只用于显示与写入闸门）
   stores/           session.ts（锁态 + 设置缓存），全局仅此一个 store
   i18n/             messages/en.ts（键的唯一真相）+ messages/zh-CN.ts + t()（约 100 行）
   styles/           tokens.css（全部取值，UI.md §1）+ vditor-override.css（覆盖 Vditor 的唯一入口）
@@ -136,23 +137,31 @@ CREATE TRIGGER journal_au AFTER UPDATE OF title, content ON journal BEGIN
 
 ### 2.1 时间的三列用法
 
-**排序与区间用 `recorded_at`，日历归属用 `day_key`，显示用 `recorded_at + recorded_off` 重建。** `day_key` 由 Rust 在 upsert 事务内算出（PRD §2.2）；前端上传 offset 与墙上时间，`day_key` 由 Rust 单向下发。
+**排序与区间用 `recorded_at`，日历归属用 `day_key`，显示用 `recorded_at + recorded_off` 重建。** `day_key` 由 Rust 在 upsert 事务内算出：
+
+```
+day_key = date((recorded_at → recorded_off 得本地墙钟) - day_boundary_minutes)
+```
+
+`recorded_at` / `recorded_off` 是事实，永不因为分界点变化而改写（PRD §2.8）。前端上传 offset 与墙上时间，`day_key` 由 Rust 单向下发；前端只为 UI 判定实现同一公式（`utils/date.ts::diaryToday`），不写库。分界点改值时按 §2.2 重排。
 
 ### 2.2 day_mark 的维护
 
 save / delete / purge 在同一事务内增量更新（`UPDATE ... SET n = n + ?, words = words + ?`）。打点与连续天数一律读这张表。启动自检跑一次全量比对，差异 > 0 则静默全量重算并记日志。全量重算同时暴露给 `data_rebuild(what='day_mark')`（§3）。
 
+**改分界点是一次全局重排**：`settings_patch` 检测到 `dayBoundaryMinutes` 变化时，在同一个事务里调 `journal::recompute_day_keys(conn, boundary)`——遍历全部 `journal`（含回收站）重算 `day_key`，`DELETE FROM day_mark` 后按存活条目 `GROUP BY day_key` 重建；随后写设置并提交。返回全量设置并 emit `dd://settings-changed`，前端以新日界重算今天与写入闸门，重新进入首页即按新 `day_key` 查询。`recorded_at` 不变，所以把分界点改回去就能复原归属。
+
 ---
 
 ## 3. IPC 面
 
-Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 `limit/cursor`，cursor 是 base64 的 `recorded_at|id`。**命令只搬文字**——正文、标题、设置值、元数据；附件字节一律走 §3.1 的文件协议。
+Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 `limit/cursor`，cursor 是 base64 的 `pinned|recorded_at|id`（置顶优先级也在游标里）。**命令只搬文字**——正文、标题、设置值、元数据；附件字节一律走 §3.1 的文件协议。
 
 | 命令 | 入参 → 返回 | 备注 |
 |---|---|---|
 | `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 摘要字段：id / 派生 title / `preview`(300 字符) / mood / day_key / words / `asset_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
 | `journal_get` | `id` → `Journal`（全量 + tag 对象） | |
-| `journal_save` | `id? content format title mood tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。同事务：`day_key`、`words`、`asset_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1` |
+| `journal_save` | `id? content format title mood tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空白内容不创建条目 |
 | `journal_delete` | `id` → `day_key` | 软删；同事务更新 `day_mark` |
 | `journal_restore` / `journal_purge` | `id` / 无参 | purge 由 janitor 调，UI 也提供"清空回收站" |
 | `journal_trash_list` | `limit cursor` → `JournalPage` | |
@@ -162,7 +171,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `search_locate` | `id text` → `{total, ranges[]}` | 详情内查找（§6.3）。偏移单位是 **Unicode 码点** |
 | `tag_list` / `tag_create` / `tag_rename` / `tag_delete` / `tag_merge` | 常规 | create/rename 按 `name_key` 查重，冲突返回 `code=tag_exists` |
 | `settings_get_all` | → `Settings` | 一次拿全量，前端启动时缓存（§5） |
-| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存 |
+| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed` |
 | `stats_overview` | → `Stats` | 全走聚合 + `day_mark` |
 | `media_import` | `paths[]` → `Asset[]` | 复制/移动到 `assets/`，随机名，抽尺寸或时长，产出缩略图（§3.1）。返回元数据 |
 | `data_export_dir` | `target_dir` → `op_id` | 人可读 md 目录（PRD §5.2） |
@@ -234,9 +243,11 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 **全 App 同一时刻最多一个 Vditor 实例。** 由此定三件事：
 
-- **今天卡片是一块自动增高的 `<textarea>`**（§6.1）。正文存的就是 markdown 源，textarea 与 Vditor 读写同一份字符串。
+- **今天卡片是一块自动增高的 `<textarea>`**（§6.1），只在选中的是日记今天时挂载。正文存的就是 markdown 源，textarea 与 Vditor 读写同一份字符串；它不接 `useAutosave`，失焦或显式提交时整段写入。
 - 详情与整篇编辑才挂 `EditorPane`。桌面三栏里"今天卡片 + 详情编辑器"是 textarea 与 Vditor 并存，各管一个输入焦点。
 - `EditorPane` 卸载时调 `vditor.destroy()`；`DetailView` 在 `onDeactivated` 里只冲刷、保留实例，滚动位置与撤销栈随实例一起留住（PRD §2.1）。
+
+**当前日记与只读过去**：`session.settings.dayBoundaryMinutes` 是唯一输入，`utils/date.ts::diaryToday(boundary, now)` 与 Rust 的 `compute_day_key` 同式。`/today` 的 `selected` 缺省取它；`TodayCard` 只在 `selected === today` 时挂载；`DetailView` 加载时把 `day_key < diaryToday` 置为 `readOnly`，`persist()` 第一行短路，编辑入口（FAB / 顶栏铅笔 / 双击 / `E` / `?edit=1`）全部经过这一个布尔。新建路由 `/j/new` 不带日期，保存时用 `recordedAtNow()`，`day_key` 仍由 Rust 单向决定；空白草稿由 `persist()` 的 trim 检查挡在落库之前。
 
 **`EditorPane.vue`** 对外暴露 `modelValue`、`dirty`、`insertText(text)`、`renderSource`（"看源码"切换）、`revealRange(range)`（把 §6.3 的码点区间滚进视野并落光标）。Vditor 的 DOM 归 Vditor：编辑器内容单向流出，外部只在初始挂载与显式"看源码"切换两个时机写入，联动一律走事件回调。
 
@@ -252,7 +263,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 冲刷路径一律 await 到落库完成再放行导航
 ```
 
-去抖 1s（PRD §7）是 `useAutosave.ts` 里的具名常量，settings 清单里没有这一项（PRD §2.7）。
+去抖 1s（PRD §7）是 `useAutosave.ts` 里的具名常量，settings 清单里没有这一项（PRD §2.7）。`useAutosave` 只服务 `DetailView`；今天卡片是一次性提交，不在此列（§6.1）。
 
 `journal_save` 带 `revision`，服务端比对失败返回 `bad_revision`，处理动作一个：**丢弃本次，以最后一次冲刷为准**。
 
@@ -260,7 +271,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 **文案**：`i18n/messages/en.ts` 是键的唯一真相（扁平 key + `{n}` 占位），`zh-CN.ts` 用 `satisfies typeof en` 声明，缺键直接编译失败；`t()` 加 `Intl.PluralRules` 约 100 行。语言切换改根节点一个 `locale` ref，文案由计算属性重算，视图树保持挂载。
 
-**时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `day_key` 三个原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。
+**时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `day_key` 三个原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。修仙模式的 24+ 时刻也在前端算：本地墙钟早于分界点时，日期取前一天、小时 +24（`displayParts`），再交给格式串与 `Intl`。
 
 **断点**：`useBreakpoint` 用 `matchMedia` 订阅 `<600 / 600-960 / 960-1280 / >1280`，**只在档位变化时发布**，组件按 `isWide`/`isNarrow` 翻转重渲染。
 
@@ -269,7 +280,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 ## 6. 关键流程
 
 **6.1 记一条（今天卡片）**
-`TodayCard` 是一块自动增高的 `<textarea>`（1 → 6 行后内部滚动），实例配额留给详情（§5）。输入 → `useAutosave` → `journal_save(id=null, …)` → 返回新 id 与 `day_key` → 广播 `data-changed` → 卡片下方"今天已存 n 条"更新，卡片随之清空。两个附加动作：粘贴/拖入图片走 `media_import` 后插一行 `![](ddasset://image/{name})`；点右下角"展开"把当前文本原样交给 `DetailView` 继续排。**卡片与当日列表是两条独立记录**：卡片是草稿式快速入口，写下第一条后它落到列表里、卡片回到空态（PRD §3 的"0 跳页"）。
+`TodayCard` 是一块自动增高的 `<textarea>`（1 → 6 行后内部滚动），实例配额留给详情（§5），并且只在选中的是日记今天时挂载。提交走三个时机——失焦 / `Ctrl/⌘+Enter` / "保存"按钮——`trim` 为空时直接返回，不产生空条目。否则 `journal_save(id=null, recordedAt=now, recordedOff=local)` → Rust 按当前分界点算 `day_key` → 广播 `data-changed` → 卡片清空、高度复位 → 列表重查并停在今天。**它不走去抖自动保存**：这是"写一条就走"的快速入口，不是详情编辑器（PRD §2.8）。粘贴/拖入图片与"展开到详情"两种附加动作随 M2 的附件一起排（PRD §8）。**卡片与当日列表是两条独立记录**：卡片是草稿式快速入口，写下第一条后它落到列表里、卡片回到空态（PRD §3 的"0 跳页"）。
 
 **6.2 周条打点**
 `day_marks(from, to)` 只读 `day_mark` 的主键区间，一次查询覆盖 7 天；切月查月区间。周条与整月共用 `useDayMarks(month)`，切月才失效。
@@ -307,6 +318,8 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 5. **样式覆盖是一天独立工期，排在编辑器能打字之后、首页接线之前。** 要盖的是 `.vditor-reset`、`.vditor-reset h1…h6`、`.vditor-ir__marker`、`.vditor-toolbar`、`pre` 五处，全部写进 `styles/vditor-override.css`，用 `:where()` 保持零特异度，让后续覆盖始终可用普通选择器完成。取值对照 UI.md §4。
 
+工具栏的覆盖是同一文件里唯一用容器查询的地方：`.vditor` 上 `container-type: inline-size`，宽容器单行 flex、按钮平分宽度，容器 ≤559px 切 7 列网格两行并隐藏分隔线；不出现横向滚动。
+
 另两件事：公式/mermaid/hljs 资源本地化到 `dist/`，`cdn` 选项指向 `_assets/` 下的本地路径（PRD §7）；§9 的 CSP 里 `style-src 'unsafe-inline'` 与 `data:` 是 Vditor 需要的。
 
 ---
@@ -337,7 +350,7 @@ CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo ru
 
 `domain/` 是主战场，优先级最高的是 `md_doc` 往返等价（它承担 PRD §1 "数据可达"）。
 
-- `day_key`：固定 offset 的日期归属、offset 为 +8/+5:30/-5 的边界时刻、夏令时切换前后同一 `day_key` 的稳定性、`recorded_at` 排序与 `day_key` 分组一致性。
+- `day_key`：固定 offset 的日期归属、offset 为 +8/+5:30/-5 的边界时刻、夏令时切换前后同一 `day_key` 的稳定性、`recorded_at` 排序与 `day_key` 分组一致性；分界点 0 / 240 / 479 时 00:00–07:59 的归属、跨月与跨年边界。
 - `words`：纯中文、中英混排、代码块、表格、超长文本；`title`/`preview` 的 100/300 截断与换行折叠。
 - `md_doc`：随机生成 100 条含全字段与 `ddasset://` 引用的日记 → export → import → export → 比较。
 - `trash`：注入假时钟，检查过期集合与保留期边界。
@@ -348,10 +361,11 @@ CI：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`cargo ru
 
 - 迁移：逐版本 up，中途注入失败后 rollback 的完整性。
 - 派生数据：随机 1000 次 save/delete/purge 后，`day_mark` 与 `asset_n`/`cover_asset` 必须与 `data_rebuild` 的全量结果逐行相等（PRD §6 第 3 条的防线）。
+- 分界点重排：在 17:30Z/+480 存一条落在明天，改 `dayBoundaryMinutes=240` 后同一条落回今天；`day_mark`、列表与回收站同步；改回 0 后归属复原。
 - `search`：三字符走 FTS、单/双字符走兜底且 `partial=true`、结果集只含存活条目、`sensitive` 仅在解锁态参与、码点偏移与 `chars()` 计数一致。
 - `journal_save` 并发：去抖到点与显式冲刷同时提交 → 一次成功写入，另一次得到 `bad_revision` 并被上层丢弃。
 
-前端测三个 composable：`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
+前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
 
 ---
 

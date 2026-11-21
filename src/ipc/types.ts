@@ -12,6 +12,8 @@ export interface Settings {
   showStatsCard: boolean;
   quickRecord: boolean;
   lockLeaveDelayS: number;
+  reduceMotion: boolean;
+  dayBoundaryMinutes: number;
 }
 
 export interface Tag {

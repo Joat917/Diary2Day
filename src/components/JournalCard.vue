@@ -4,8 +4,11 @@ import { mdiImageMultipleOutline, mdiPin } from "@mdi/js";
 import type { JournalSummary } from "../ipc/types";
 import { t } from "../i18n";
 import { moodByCode } from "../constants/moods";
+import { useSession } from "../stores/session";
 import { formatCardDate } from "../utils/date";
 import Icon from "./Icon.vue";
+
+const session = useSession();
 
 const props = withDefaults(
   defineProps<{
@@ -66,7 +69,13 @@ const previewParts = computed(() => {
       </template>
     </p>
     <div v-if="hasMeta" class="meta">
-      <span class="time">{{ formatCardDate(item.recorded_at, item.recorded_off) }}</span>
+      <span class="time">{{
+        formatCardDate(
+          item.recorded_at,
+          item.recorded_off,
+          session.settings.dayBoundaryMinutes,
+        )
+      }}</span>
       <span v-if="mood" class="mood">
         <Icon :path="mood.path" :size="16" :label="t(mood.labelKey)" />
       </span>

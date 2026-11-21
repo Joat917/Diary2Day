@@ -4,7 +4,6 @@ import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import Vditor from "vditor";
 import {
   mdiArrowLeft,
-  mdiCheck,
   mdiPencil,
   mdiPin,
   mdiPinOutline,
@@ -22,7 +21,7 @@ import { t } from "../i18n";
 import { useBreakpoint } from "../composables/useBreakpoint";
 import { useAutosave } from "../composables/useAutosave";
 import { useSession } from "../stores/session";
-import { formatRecordedAt } from "../utils/date";
+import { diaryToday, formatRecordedAt, recordedAtNow } from "../utils/date";
 import EditorPane from "../components/EditorPane.vue";
 import Icon from "../components/Icon.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
@@ -47,10 +46,33 @@ const entryId = computed(() => String(route.params.id ?? ""));
 const metaSaving = ref(false);
 const deleteOpen = ref(false);
 const pendingFocus = ref(false);
+let skipLoadId = "";
+let leaving = false;
+
+const readOnly = computed(() => {
+  const item = journal.value;
+  if (!item) return false;
+  return item.day_key < diaryToday(session.settings.dayBoundaryMinutes);
+});
 
 async function persist(value: string) {
+  if (readOnly.value) return;
   const item = journal.value;
-  if (!item) return;
+  if (!item) {
+    if (!value.trim()) return;
+    const stamp = recordedAtNow();
+    const saved = await journalSave({
+      content: value,
+      recordedAt: stamp.recordedAt,
+      recordedOff: stamp.recordedOff,
+    });
+    journal.value = saved;
+    skipLoadId = saved.id;
+    if (!leaving) {
+      await router.replace({ path: `/j/${saved.id}`, query: { edit: "1" } });
+    }
+    return;
+  }
   const saved = await journalSave({
     id: item.id,
     content: value,
@@ -108,12 +130,22 @@ async function saveMeta() {
 }
 
 const dateText = computed(() => {
+  const boundary = session.settings.dayBoundaryMinutes;
   const item = journal.value;
-  if (!item) return "";
+  if (!item) {
+    const stamp = recordedAtNow();
+    return formatRecordedAt(
+      stamp.recordedAt,
+      stamp.recordedOff,
+      session.settings.dateFormat,
+      boundary,
+    );
+  }
   return formatRecordedAt(
     item.recorded_at,
     item.recorded_off,
     session.settings.dateFormat,
+    boundary,
   );
 });
 
@@ -195,6 +227,18 @@ function highlightQuery() {
 async function load() {
   const id = entryId.value;
   if (!id) return;
+  if (id === "new") {
+    journal.value = null;
+    content.value = "";
+    missing.value = false;
+    failed.value = false;
+    loading.value = false;
+    editing.value = true;
+    await nextTick();
+    pendingFocus.value = true;
+    editorPane.value?.focus();
+    return;
+  }
   loading.value = true;
   missing.value = false;
   failed.value = false;
@@ -202,7 +246,8 @@ async function load() {
     const item = await journalGet(id);
     journal.value = item;
     content.value = item.content;
-    editing.value = route.query.edit === "1" || (!isNarrow.value && !queryText());
+    const locked = item.day_key < diaryToday(session.settings.dayBoundaryMinutes);
+    editing.value = !locked && (route.query.edit === "1" || !queryText());
     await nextTick();
     if (editing.value) {
       pendingFocus.value = true;
@@ -231,6 +276,11 @@ watch(
   entryId,
   async (next, previous) => {
     if (!next) return;
+    if (skipLoadId && next === skipLoadId) {
+      skipLoadId = "";
+      return;
+    }
+    skipLoadId = "";
     if (previous) await flushSave();
     content.value = "";
     await load();
@@ -244,23 +294,18 @@ function onEditorInput(value: string) {
 }
 
 async function startEdit() {
-  if (editing.value || !journal.value) return;
+  if (editing.value || !journal.value || readOnly.value) return;
   editing.value = true;
+  pendingFocus.value = true;
   await nextTick();
   editorPane.value?.focus();
-}
-
-async function finishEdit() {
-  await flushSave();
-  editing.value = false;
-  await nextTick();
-  renderPreview();
 }
 
 async function togglePin() {
   const item = journal.value;
   if (!item) return;
   const next = !item.pinned;
+  await flushSave();
   await journalSetPinned(item.id, next);
   item.pinned = next;
 }
@@ -298,8 +343,6 @@ function onKeydown(event: KeyboardEvent) {
   if (typing) return;
   if (event.key === "e" || event.key === "E") {
     void startEdit();
-  } else if (event.key === "Escape" && editing.value && isNarrow.value) {
-    void finishEdit();
   }
 }
 
@@ -323,6 +366,7 @@ onMounted(() => {
 });
 
 onBeforeRouteLeave(async () => {
+  leaving = true;
   await flushSave();
 });
 
@@ -343,10 +387,6 @@ watch(
     }
   },
 );
-
-watch(isNarrow, (narrow) => {
-  if (!narrow && !editing.value) void startEdit();
-});
 </script>
 
 <template>
@@ -361,6 +401,7 @@ watch(isNarrow, (narrow) => {
         <span v-if="journal" class="meta">
           {{ t("detail.words", { n: journal.words }) }}
           <template v-if="journal.pinned"> · {{ t("detail.pinned") }}</template>
+          <template v-if="readOnly"> · {{ t("detail.readOnly") }}</template>
           <template v-if="saveState === 'saving'">
             · {{ t("detail.saving") }}
           </template>
@@ -377,7 +418,7 @@ watch(isNarrow, (narrow) => {
 
       <div class="actions">
         <button
-          v-if="journal && !editing && isWide"
+          v-if="journal && !editing && !readOnly && isWide"
           class="icon-btn"
           type="button"
           :aria-label="t('common.edit')"
@@ -403,15 +444,6 @@ watch(isNarrow, (narrow) => {
           @click="remove"
         >
           <Icon :path="mdiTrashCanOutline" :size="20" />
-        </button>
-        <button
-          v-if="journal && editing && isNarrow"
-          class="done"
-          type="button"
-          @click="finishEdit"
-        >
-          <Icon :path="mdiCheck" :size="16" />
-          {{ t("common.done") }}
         </button>
       </div>
     </header>
@@ -441,32 +473,31 @@ watch(isNarrow, (narrow) => {
         :action-label="t('common.retry')"
         @action="load"
       />
-      <template v-else-if="journal">
-        <div v-if="editing" class="editor-wrap">
-          <EditorPane
-            ref="editorPane"
-            :model-value="content"
-            @update:model-value="onEditorInput"
-            @ready="onEditorReady"
-          />
-        </div>
-        <article
-          v-else
-          ref="previewEl"
-          class="preview"
-          @dblclick="startEdit"
-        />
-        <p v-if="!content.trim() && !editing" class="hint">
-          {{ t("detail.readHint") }}
-        </p>
-        <p v-if="editing && !content.trim()" class="hint warn">
-          {{ t("detail.emptyWarning") }}
-        </p>
+      <template v-else>
+        <Transition name="mode" mode="out-in">
+          <div v-if="editing" key="edit" class="editor-wrap">
+            <EditorPane
+              ref="editorPane"
+              :model-value="content"
+              @update:model-value="onEditorInput"
+              @ready="onEditorReady"
+            />
+          </div>
+          <div v-else-if="journal" key="preview" class="preview-wrap">
+            <article ref="previewEl" class="preview" @dblclick="startEdit" />
+            <p v-if="readOnly" class="hint">
+              {{ t("detail.readOnlyHint") }}
+            </p>
+            <p v-else-if="!content.trim()" class="hint">
+              {{ t("detail.readHint") }}
+            </p>
+          </div>
+        </Transition>
       </template>
     </div>
 
     <button
-      v-if="journal && !editing && isNarrow"
+      v-if="journal && !editing && !readOnly && isNarrow"
       class="fab"
       type="button"
       @click="startEdit"
@@ -564,28 +595,29 @@ watch(isNarrow, (narrow) => {
   flex: none;
 }
 
-.done {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  height: 36px;
-  padding-inline: var(--s-3);
-  border-radius: var(--r-pill);
-  background: var(--c-primary);
-  color: var(--c-on-primary);
-  font-size: var(--t-small);
-}
-
 .body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .editor-wrap {
+  width: min(calc(100% - var(--s-4) * 2), calc(var(--measure) + var(--s-5) * 2));
   height: 100%;
   min-height: 0;
-  padding: var(--s-3) var(--s-4) var(--s-4);
+  margin-inline: auto;
+  padding: var(--s-3) 0 var(--s-4);
+}
+
+.mode-enter-active,
+.mode-leave-active {
+  transition: opacity var(--m-1) var(--ease);
+}
+
+.mode-enter-from,
+.mode-leave-to {
+  opacity: 0;
 }
 
 .preview {
@@ -616,11 +648,6 @@ watch(isNarrow, (narrow) => {
   color: var(--c-on-surface-muted);
 }
 
-.hint.warn {
-  color: var(--c-danger);
-  padding-top: 0;
-}
-
 .indent :deep(.preview p) {
   text-indent: 2em;
 }
@@ -643,6 +670,11 @@ watch(isNarrow, (narrow) => {
   color: var(--c-on-primary);
   box-shadow: var(--e-2);
   font-size: var(--t-small);
+  transition: transform var(--m-1) var(--ease);
+}
+
+.fab:active {
+  transform: scale(0.98);
 }
 
 @media (min-width: 960px) {

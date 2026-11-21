@@ -80,17 +80,21 @@ fn escape_like(text: &str) -> String {
         .replace('_', "\\_")
 }
 
-pub fn encode_cursor(recorded_at: &str, id: &str) -> String {
-    base64::engine::general_purpose::STANDARD.encode(format!("{recorded_at}|{id}"))
+pub fn encode_cursor(pinned: bool, recorded_at: &str, id: &str) -> String {
+    let flag = if pinned { 1 } else { 0 };
+    base64::engine::general_purpose::STANDARD.encode(format!("{flag}|{recorded_at}|{id}"))
 }
 
-fn decode_cursor(cursor: &str) -> Option<(String, String)> {
+fn decode_cursor(cursor: &str) -> Option<(bool, String, String)> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(cursor)
         .ok()?;
     let text = String::from_utf8(raw).ok()?;
-    let (ts, id) = text.split_once('|')?;
-    Some((ts.to_string(), id.to_string()))
+    let mut parts = text.splitn(3, '|');
+    let flag = parts.next()?;
+    let ts = parts.next()?;
+    let id = parts.next()?;
+    Some((flag == "1", ts.to_string(), id.to_string()))
 }
 
 fn map_summary(row: &Row<'_>) -> rusqlite::Result<JournalSummary> {
@@ -172,16 +176,22 @@ pub fn list(conn: &Connection, params: ListParams) -> Result<JournalPage, AppErr
         args.push(tag_id.clone().into());
     }
     if let Some(cursor) = &params.cursor
-        && let Some((ts, id)) = decode_cursor(cursor)
+        && let Some((pinned, ts, id)) = decode_cursor(cursor)
     {
-        sql.push_str(" AND (recorded_at < ? OR (recorded_at = ? AND id < ?))");
+        sql.push_str(
+            " AND (pinned < ? OR (pinned = ? AND \
+             (recorded_at < ? OR (recorded_at = ? AND id < ?))))",
+        );
+        let flag = pinned as i64;
+        args.push(flag.into());
+        args.push(flag.into());
         args.push(ts.clone().into());
         args.push(ts.into());
         args.push(id.into());
     }
 
     let limit = params.limit.clamp(1, 200);
-    sql.push_str(" ORDER BY recorded_at DESC, id DESC LIMIT ?");
+    sql.push_str(" ORDER BY pinned DESC, recorded_at DESC, id DESC LIMIT ?");
     args.push((limit + 1).into());
 
     let mut stmt = conn.prepare(&sql)?;
@@ -194,7 +204,7 @@ pub fn list(conn: &Connection, params: ListParams) -> Result<JournalPage, AppErr
         items.truncate(limit as usize);
         items
             .last()
-            .map(|item| encode_cursor(&item.recorded_at, &item.id))
+            .map(|item| encode_cursor(item.pinned, &item.recorded_at, &item.id))
     } else {
         None
     };
@@ -329,7 +339,8 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
         .recorded_off
         .unwrap_or_else(crate::domain::local_offset_minutes);
     let recorded_at = input.recorded_at.unwrap_or_else(|| now.clone());
-    let day = day_key::compute_day_key(&recorded_at, offset)?;
+    let boundary = crate::db::settings::get_all(conn)?.day_boundary_minutes;
+    let day = day_key::compute_day_key(&recorded_at, offset, boundary)?;
     let format = input.format.unwrap_or_else(|| "markdown".to_string());
     if format != "markdown" && format != "plain" {
         return Err(AppError::new("bad_format", "不支持的正文格式"));
@@ -549,6 +560,30 @@ pub struct DayMark {
     pub words: i64,
 }
 
+pub fn recompute_day_keys(conn: &Connection, boundary_minutes: u32) -> Result<(), AppError> {
+    let rows: Vec<(String, String, i32)> = {
+        let mut stmt = conn.prepare("SELECT id, recorded_at, recorded_off FROM journal")?;
+        let mapped =
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (id, recorded_at, offset) in rows {
+        let day = day_key::compute_day_key(&recorded_at, offset, boundary_minutes)?;
+        conn.execute(
+            "UPDATE journal SET day_key = ?1 WHERE id = ?2",
+            params![day, id],
+        )?;
+    }
+    conn.execute("DELETE FROM day_mark", [])?;
+    conn.execute(
+        "INSERT INTO day_mark(day_key, n, words) \
+         SELECT day_key, COUNT(*), COALESCE(SUM(words), 0) FROM journal \
+         WHERE deleted_at IS NULL GROUP BY day_key",
+        [],
+    )?;
+    Ok(())
+}
+
 pub fn search(
     conn: &Connection,
     text: &str,
@@ -594,7 +629,7 @@ pub fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{migrate, tag};
+    use crate::db::{migrate, settings, tag};
 
     fn test_conn() -> Connection {
         let mut conn = Connection::open_in_memory().expect("open in-memory db");
@@ -649,6 +684,88 @@ mod tests {
         let marks = day_marks(&conn, "2026-11-01", "2026-11-30").expect("marks");
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].n, 1);
+    }
+
+    #[test]
+    fn list_puts_pinned_first_and_paginates_across_pin_groups() {
+        let mut conn = test_conn();
+        let mut old = input("oldest");
+        old.recorded_at = Some("2026-11-21T02:00:00Z".to_string());
+        let old = save(&mut conn, old).expect("save old");
+        let mut middle = input("middle");
+        middle.recorded_at = Some("2026-11-21T03:00:00Z".to_string());
+        let middle = save(&mut conn, middle).expect("save middle");
+        let mut newest = input("newest");
+        newest.recorded_at = Some("2026-11-21T04:00:00Z".to_string());
+        let newest = save(&mut conn, newest).expect("save newest");
+        set_pinned(&conn, &old.id, true).expect("pin");
+
+        let page = list_day(&conn, "2026-11-21");
+        let ids: Vec<&str> = page.items.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![old.id.as_str(), newest.id.as_str(), middle.id.as_str()]
+        );
+
+        let first = list(
+            &conn,
+            ListParams {
+                day_key: Some("2026-11-21".to_string()),
+                from: None,
+                to: None,
+                tag_id: None,
+                mood: None,
+                include_trash: false,
+                limit: 2,
+                cursor: None,
+            },
+        )
+        .expect("first page");
+        assert_eq!(first.items.len(), 2);
+
+        let second = list(
+            &conn,
+            ListParams {
+                day_key: Some("2026-11-21".to_string()),
+                from: None,
+                to: None,
+                tag_id: None,
+                mood: None,
+                include_trash: false,
+                limit: 2,
+                cursor: first.next_cursor,
+            },
+        )
+        .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].id, middle.id);
+    }
+
+    #[test]
+    fn boundary_rebuckets_late_night_entries_and_marks() {
+        let mut conn = test_conn();
+        let mut late = input("late night");
+        late.recorded_at = Some("2026-11-21T17:30:00Z".to_string());
+        late.recorded_off = Some(480);
+        let late = save(&mut conn, late).expect("save late");
+        assert_eq!(late.day_key, "2026-11-22");
+
+        settings::patch(&mut conn, serde_json::json!({ "dayBoundaryMinutes": 240 }))
+            .expect("patch boundary");
+
+        let moved = get(&conn, &late.id).expect("get moved");
+        assert_eq!(moved.day_key, "2026-11-21");
+        assert_eq!(list_day(&conn, "2026-11-21").items.len(), 1);
+        assert!(list_day(&conn, "2026-11-22").items.is_empty());
+        let marks = day_marks(&conn, "2026-11-01", "2026-11-30").expect("marks");
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].day_key, "2026-11-21");
+
+        let mut after = input("after boundary");
+        after.recorded_at = Some("2026-11-21T17:45:00Z".to_string());
+        after.recorded_off = Some(480);
+        let after = save(&mut conn, after).expect("save after");
+        assert_eq!(after.day_key, "2026-11-21");
     }
 
     #[test]

@@ -3,8 +3,13 @@ import type { DateFormat } from "../ipc/types";
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-export function todayKey(now = new Date()): string {
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+export function diaryDayKey(date: Date, boundaryMinutes = 0): string {
+  const shifted = new Date(date.getTime() - boundaryMinutes * 60_000);
+  return `${shifted.getFullYear()}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())}`;
+}
+
+export function diaryToday(boundaryMinutes = 0, now = new Date()): string {
+  return diaryDayKey(now, boundaryMinutes);
 }
 
 export function parseDayKey(dayKey: string): { year: number; month: number; day: number } {
@@ -37,24 +42,11 @@ export function localOffsetMinutes(now = new Date()): number {
   return -now.getTimezoneOffset();
 }
 
-export function recordedAtForDay(dayKey: string, now = new Date()): {
+export function recordedAtNow(now = new Date()): {
   recordedAt: string;
   recordedOff: number;
 } {
-  const { year, month, day } = parseDayKey(dayKey);
-  const offset = localOffsetMinutes(now);
-  const wall = Date.UTC(
-    year,
-    month - 1,
-    day,
-    now.getHours(),
-    now.getMinutes(),
-    now.getSeconds(),
-  );
-  return {
-    recordedAt: new Date(wall - offset * 60_000).toISOString(),
-    recordedOff: offset,
-  };
+  return { recordedAt: now.toISOString(), recordedOff: localOffsetMinutes(now) };
 }
 
 export function weekdayName(dayKey: string): string {
@@ -86,12 +78,27 @@ function weekdayLabel(weekday: number): string {
   return `周${t(`weekday.${weekday}` as MessageKey)}`;
 }
 
+function displayParts(
+  recordedAt: string,
+  offsetMinutes: number,
+  boundaryMinutes: number,
+) {
+  const wall = wallDate(recordedAt, offsetMinutes);
+  const value = parts(wall);
+  if (value.hour * 60 + value.minute < boundaryMinutes) {
+    const previous = parts(new Date(wall.getTime() - 86_400_000));
+    return { ...previous, hour: value.hour + 24 };
+  }
+  return value;
+}
+
 export function formatRecordedAt(
   recordedAt: string,
   offsetMinutes: number,
   format: DateFormat,
+  boundaryMinutes = 0,
 ): string {
-  const value = parts(wallDate(recordedAt, offsetMinutes));
+  const value = displayParts(recordedAt, offsetMinutes, boundaryMinutes);
   if (format === "short") {
     return `${pad(value.month)}/${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}`;
   }
@@ -101,9 +108,22 @@ export function formatRecordedAt(
   return `${value.year}/${pad(value.month)}/${pad(value.day)} ${weekdayLabel(value.weekday)}`;
 }
 
-export function formatCardDate(recordedAt: string, offsetMinutes: number): string {
-  const value = parts(wallDate(recordedAt, offsetMinutes));
+export function formatCardDate(
+  recordedAt: string,
+  offsetMinutes: number,
+  boundaryMinutes = 0,
+): string {
+  const value = displayParts(recordedAt, offsetMinutes, boundaryMinutes);
   return `${pad(value.month)}/${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}`;
+}
+
+export function formatBoundary(minutes: number): string {
+  return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}
+
+export function parseBoundary(value: string): number {
+  const [hour = 0, minute = 0] = value.split(":").map(Number);
+  return Math.min(Math.max(hour * 60 + minute, 0), 479);
 }
 
 export function formatDayTitle(dayKey: string): string {

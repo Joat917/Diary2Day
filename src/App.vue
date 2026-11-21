@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from "vue-router";
+import { computed } from "vue";
+import { RouterLink, RouterView, useRoute } from "vue-router";
 import { mdiAccountCircleOutline, mdiCalendarToday, mdiMagnify } from "@mdi/js";
 import { useBreakpoint } from "./composables/useBreakpoint";
 import { t, type MessageKey } from "./i18n";
 import Icon from "./components/Icon.vue";
 
+const route = useRoute();
 const { isWide } = useBreakpoint();
 
 const navItems: { to: string; label: MessageKey; icon: string }[] = [
@@ -12,6 +14,10 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
   { to: "/discover", label: "nav.discover", icon: mdiMagnify },
   { to: "/me", label: "nav.me", icon: mdiAccountCircleOutline },
 ];
+
+const activeIndex = computed(() =>
+  navItems.findIndex((item) => route.path === item.to || route.path.startsWith(`${item.to}/`)),
+);
 </script>
 
 <template>
@@ -34,10 +40,20 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
     </aside>
 
     <main class="content">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <Transition name="view" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </RouterView>
     </main>
 
     <nav v-if="!isWide" class="bottom">
+      <span
+        class="nav-pill"
+        :class="{ hidden: activeIndex < 0 }"
+        :style="{ transform: `translateX(${activeIndex * 100}%)` }"
+        aria-hidden="true"
+      />
       <RouterLink
         v-for="item in navItems"
         :key="item.to"
@@ -62,7 +78,7 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
 
 .app.wide {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 184px minmax(0, 1fr);
 }
 
 .rail {
@@ -97,6 +113,9 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
   border-radius: var(--r-md);
   color: var(--c-on-surface-muted);
   font-size: var(--t-small);
+  transition:
+    background var(--m-1) var(--ease),
+    color var(--m-1) var(--ease);
 }
 
 .rail-link.active {
@@ -125,7 +144,18 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
   max-width: none;
 }
 
+.view-enter-active,
+.view-leave-active {
+  transition: opacity var(--m-1) var(--ease);
+}
+
+.view-enter-from,
+.view-leave-to {
+  opacity: 0;
+}
+
 .bottom {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
@@ -133,6 +163,32 @@ const navItems: { to: string; label: MessageKey; icon: string }[] = [
   border-top: 1px solid var(--c-hairline);
   background: var(--c-surface-1);
   flex: none;
+}
+
+.nav-pill {
+  position: absolute;
+  top: 0;
+  inset-inline-start: 0;
+  width: 33.3333%;
+  height: 2px;
+  transition:
+    transform var(--m-2) var(--ease),
+    opacity var(--m-2) var(--ease);
+  pointer-events: none;
+}
+
+.nav-pill::after {
+  content: "";
+  display: block;
+  width: 24px;
+  height: 2px;
+  margin-inline: auto;
+  border-radius: var(--r-pill);
+  background: var(--c-primary);
+}
+
+.nav-pill.hidden {
+  opacity: 0;
 }
 
 .bottom-link {

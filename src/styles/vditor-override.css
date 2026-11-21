@@ -22,41 +22,93 @@
   background: transparent;
   font-family: var(--font-body);
   color: var(--c-on-surface);
+  container-type: inline-size;
 }
 
 .vditor-toolbar {
-  height: 40px;
-  min-height: 40px;
-  padding: 0 var(--s-2);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  height: auto;
+  min-height: 46px;
+  padding: var(--s-1) var(--s-2);
   margin: var(--s-2) var(--s-2) 0;
   background: var(--c-surface-2);
   border: none;
   border-radius: var(--r-sm);
-  display: flex;
-  align-items: center;
-  overflow-x: auto;
+  overflow: visible;
+  --toolbar-height: 32px;
 }
 
 .vditor-toolbar__item {
-  height: 28px;
-  min-width: 28px;
+  float: none;
+  display: flex;
+  flex: 1 1 0;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.vditor-toolbar__item .vditor-tooltipped {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--r-sm);
+}
+
+.vditor-toolbar__item .vditor-tooltipped:hover {
+  background: var(--c-surface-1);
 }
 
 .vditor-toolbar__item svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   color: var(--c-on-surface-muted);
 }
 
 .vditor-toolbar__item--current svg,
-.vditor-toolbar__item:hover svg {
+.vditor-toolbar__item .vditor-tooltipped:hover svg {
   color: var(--c-primary);
 }
 
 .vditor-toolbar__divider {
+  float: none;
+  flex: 0 0 auto;
   height: 16px;
-  margin-inline: var(--s-1);
-  background-color: var(--c-hairline);
+  margin: 0 var(--s-1);
+  border: none;
+  border-inline-start: 1px solid var(--c-hairline);
+}
+
+.vditor-toolbar__br {
+  display: none;
+}
+
+/* Narrow editors: two aligned rows of seven, no group dividers. */
+@container (max-width: 559px) {
+  .vditor-toolbar {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    justify-items: center;
+    align-items: center;
+    row-gap: var(--s-1);
+    column-gap: 2px;
+    min-height: 0;
+  }
+
+  .vditor-toolbar__item {
+    flex: none;
+    width: 32px;
+  }
+
+  .vditor-toolbar__divider {
+    display: none;
+  }
 }
 
 .vditor-content {
@@ -72,6 +124,10 @@
   margin-inline: auto;
   padding: 0;
   caret-color: var(--c-primary);
+}
+
+.vditor-ir {
+  scrollbar-gutter: stable;
 }
 
 .vditor-ir .vditor-reset {
@@ -232,11 +288,4 @@ body .vditor-reset pre {
 
 body .vditor-reset code:not(pre code) {
   background: var(--c-surface-2);
-}
-
-@media (max-width: 599px) {
-  .vditor-toolbar {
-    margin-inline: 0;
-    border-radius: 0;
-  }
 }

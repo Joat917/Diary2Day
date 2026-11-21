@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { mdiCalendarMonthOutline, mdiPlus } from "@mdi/js";
-import { journalList, journalSave, onDataChanged } from "../ipc/client";
+import { mdiCalendarMonthOutline, mdiCrosshairsGps, mdiPlus } from "@mdi/js";
+import { journalList, onDataChanged } from "../ipc/client";
 import type { JournalSummary } from "../ipc/types";
 import { t } from "../i18n";
 import { useBreakpoint } from "../composables/useBreakpoint";
 import { useSession } from "../stores/session";
-import { formatDayTitle, greetingKey, recordedAtForDay, todayKey } from "../utils/date";
+import { diaryToday, formatDayTitle, greetingKey } from "../utils/date";
 import Icon from "../components/Icon.vue";
 import JournalCard from "../components/JournalCard.vue";
 import MiniCalendar from "../components/MiniCalendar.vue";
@@ -21,29 +21,39 @@ const session = useSession();
 const { isWide } = useBreakpoint();
 const sheetOpen = ref(false);
 
+const today = computed(() => diaryToday(session.settings.dayBoundaryMinutes));
 const selected = computed(() => {
   const value = route.query.d;
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : todayKey();
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today.value;
 });
+const isToday = computed(() => selected.value === today.value);
 
 const items = ref<JournalSummary[]>([]);
 const nextCursor = ref<string | null>(null);
 const loading = ref(true);
 const error = ref(false);
 const version = ref(0);
-const card = ref<InstanceType<typeof TodayCard> | null>(null);
+const listDir = ref<"next" | "prev">("next");
+const loadedDay = ref("");
 
 let loadToken = 0;
 
 async function load() {
   const token = ++loadToken;
+  const day = selected.value;
+  const dayChanged = loadedDay.value !== day;
+  if (dayChanged) {
+    items.value = [];
+    nextCursor.value = null;
+  }
   loading.value = true;
   error.value = false;
   try {
-    const page = await journalList({ dayKey: selected.value, limit: 50 });
+    const page = await journalList({ dayKey: day, limit: 50 });
     if (token !== loadToken) return;
     items.value = page.items;
     nextCursor.value = page.next_cursor;
+    loadedDay.value = day;
   } catch {
     if (token === loadToken) error.value = true;
   } finally {
@@ -66,7 +76,14 @@ async function loadMore() {
   }
 }
 
-watch(selected, load, { immediate: true });
+watch(
+  selected,
+  (day, previous) => {
+    if (previous && day !== previous) listDir.value = day < previous ? "prev" : "next";
+    void load();
+  },
+  { immediate: true },
+);
 
 function selectDay(dayKey: string) {
   if (dayKey === selected.value) return;
@@ -83,18 +100,15 @@ async function createEntry() {
   if (creating.value) return;
   creating.value = true;
   try {
-    const stamp = recordedAtForDay(selected.value);
-    const entry = await journalSave({
-      content: "",
-      recordedAt: stamp.recordedAt,
-      recordedOff: stamp.recordedOff,
-    });
-    await router.push({ path: `/j/${entry.id}`, query: { edit: "1" } });
-  } catch {
-    error.value = true;
+    await router.push({ path: "/j/new", query: { edit: "1" } });
   } finally {
     creating.value = false;
   }
+}
+
+function primaryAction() {
+  if (isToday.value) void createEntry();
+  else selectDay(today.value);
 }
 
 function pickDay(dayKey: string) {
@@ -111,9 +125,15 @@ watch(sheetOpen, (open) => {
   else document.removeEventListener("keydown", onSheetKey);
 });
 
+const emptyTitle = computed(() => {
+  if (selected.value === today.value) return t("today.emptyToday");
+  return selected.value < today.value ? t("today.emptyPast") : t("today.emptyFuture");
+});
+
 function onSaved() {
   version.value += 1;
-  void load();
+  if (isToday.value) void load();
+  else selectDay(today.value);
 }
 
 let unlisten: (() => void) | null = null;
@@ -152,20 +172,13 @@ onBeforeUnmount(() => {
           <button
             v-if="isWide"
             class="new-btn"
+            :class="{ secondary: !isToday }"
             type="button"
-            :disabled="creating"
-            @click="createEntry"
+            :disabled="isToday && creating"
+            @click="primaryAction"
           >
-            <Icon :path="mdiPlus" :size="18" />
-            {{ t("common.new") }}
-          </button>
-          <button
-            v-if="selected !== todayKey()"
-            class="today-btn"
-            type="button"
-            @click="selectDay(todayKey())"
-          >
-            {{ t("nav.today") }}
+            <Icon :path="isToday ? mdiPlus : mdiCrosshairsGps" :size="18" />
+            {{ isToday ? t("common.new") : t("nav.today") }}
           </button>
           <button
             v-if="!isWide"
@@ -188,59 +201,60 @@ onBeforeUnmount(() => {
       />
 
       <div class="scroll">
-        <TodayCard ref="card" :day-key="selected" @saved="onSaved" />
+        <TodayCard v-if="isToday" @saved="onSaved" />
 
-        <section class="day-list">
-          <p v-if="items.length" class="count">
-            {{ t("today.count", { n: items.length }) }}
-          </p>
+        <div class="day-stack">
+          <Transition :name="`day-${listDir}`">
+            <section :key="selected" class="day-list">
+              <p v-if="items.length" class="count">
+                {{ t("today.count", { n: items.length }) }}
+              </p>
 
-          <StateBlock v-if="loading && !items.length" kind="loading" />
-          <StateBlock
-            v-else-if="error"
-            kind="error"
-            :title="t('common.error')"
-            :action-label="t('common.retry')"
-            @action="load"
-          />
-          <StateBlock
-            v-else-if="!items.length"
-            kind="empty"
-            :title="t('today.empty')"
-            :action-label="t('today.emptyAction')"
-            @action="card?.focus()"
-          />
-          <template v-else>
-            <JournalCard
-              v-for="item in items"
-              :key="item.id"
-              :item="item"
-              @open="openEntry"
-            />
-          </template>
+              <StateBlock v-if="loading && !items.length" kind="loading" />
+              <StateBlock
+                v-else-if="error"
+                kind="error"
+                :title="t('common.error')"
+                :action-label="t('common.retry')"
+                @action="load"
+              />
+              <StateBlock v-else-if="!items.length" kind="empty" :title="emptyTitle" />
+              <template v-else>
+                <TransitionGroup name="card">
+                  <JournalCard
+                    v-for="item in items"
+                    :key="item.id"
+                    :item="item"
+                    @open="openEntry"
+                  />
+                </TransitionGroup>
+              </template>
 
-          <button
-            v-if="nextCursor"
-            class="more"
-            type="button"
-            :disabled="loading"
-            @click="loadMore"
-          >
-            {{ t("today.loadMore") }}
-          </button>
-        </section>
+              <button
+                v-if="nextCursor"
+                class="more"
+                type="button"
+                :disabled="loading"
+                @click="loadMore"
+              >
+                {{ t("today.loadMore") }}
+              </button>
+            </section>
+          </Transition>
+        </div>
       </div>
     </div>
 
     <button
       v-if="!isWide"
       class="fab"
+      :class="{ secondary: !isToday }"
       type="button"
-      :disabled="creating"
-      @click="createEntry"
+      :disabled="isToday && creating"
+      @click="primaryAction"
     >
-      <Icon :path="mdiPlus" :size="20" />
-      {{ t("common.new") }}
+      <Icon :path="isToday ? mdiPlus : mdiCrosshairsGps" :size="20" />
+      {{ isToday ? t("common.new") : t("nav.today") }}
     </button>
 
     <Transition name="sheet">
@@ -272,7 +286,7 @@ onBeforeUnmount(() => {
 
 .view.wide {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
 }
 
 .cal-col {
@@ -308,6 +322,11 @@ onBeforeUnmount(() => {
   color: var(--c-on-primary);
   font-size: var(--t-small);
   flex: none;
+  transition: transform var(--m-1) var(--ease);
+}
+
+.new-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .fab {
@@ -325,6 +344,11 @@ onBeforeUnmount(() => {
   box-shadow: var(--e-2);
   font-size: var(--t-small);
   z-index: 30;
+  transition: transform var(--m-1) var(--ease);
+}
+
+.fab:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .icon-btn {
@@ -359,9 +383,17 @@ onBeforeUnmount(() => {
   position: absolute;
   inset-inline: 0;
   top: 0;
+  max-width: 480px;
+  max-height: 100dvh;
+  margin-inline: auto;
+  overflow-y: auto;
   padding: var(--s-2) var(--s-3) var(--s-3);
   padding-top: calc(var(--s-2) + env(safe-area-inset-top, 0px));
   background: var(--c-surface-1);
+  border: 1px solid var(--c-hairline);
+  border-top: none;
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
   border-end-start-radius: var(--r-lg);
   border-end-end-radius: var(--r-lg);
   box-shadow: var(--e-2);
@@ -385,15 +417,6 @@ onBeforeUnmount(() => {
 .sheet-enter-from .sheet,
 .sheet-leave-to .sheet {
   transform: translateY(-24px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sheet-enter-active,
-  .sheet-leave-active,
-  .sheet-enter-active .sheet,
-  .sheet-leave-active .sheet {
-    transition: none;
-  }
 }
 
 .topbar {
@@ -432,19 +455,17 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-.today-btn {
-  padding: var(--s-1) var(--s-3);
-  border-radius: var(--r-pill);
+.new-btn.secondary,
+.fab.secondary {
   background: var(--c-surface-2);
   color: var(--c-primary);
-  font-size: var(--t-small);
-  min-height: 36px;
 }
 
 .scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding-bottom: 96px;
 }
 
@@ -454,11 +475,68 @@ onBeforeUnmount(() => {
   }
 }
 
+.day-stack {
+  position: relative;
+  display: grid;
+}
+
+.day-stack > .day-list {
+  grid-area: 1 / 1;
+}
+
 .day-list {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
   padding: 0 var(--s-4);
+}
+
+.day-next-enter-active,
+.day-next-leave-active,
+.day-prev-enter-active,
+.day-prev-leave-active {
+  transition:
+    opacity var(--m-3) var(--ease),
+    transform var(--m-3) var(--ease);
+}
+
+.day-next-leave-active,
+.day-prev-leave-active {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.day-next-enter-from {
+  opacity: 0;
+  transform: translateX(var(--s-8));
+}
+
+.day-next-leave-to {
+  opacity: 0;
+  transform: translateX(calc(var(--s-8) * -1));
+}
+
+.day-prev-enter-from {
+  opacity: 0;
+  transform: translateX(calc(var(--s-8) * -1));
+}
+
+.day-prev-leave-to {
+  opacity: 0;
+  transform: translateX(var(--s-8));
+}
+
+.card-enter-active {
+  transition:
+    opacity var(--m-1) var(--ease),
+    transform var(--m-1) var(--ease);
+}
+
+.card-enter-from {
+  opacity: 0;
+  transform: translateY(var(--s-2));
 }
 
 .count {

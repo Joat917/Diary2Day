@@ -14,6 +14,8 @@ const defaults: Settings = {
   showStatsCard: true,
   quickRecord: true,
   lockLeaveDelayS: 60,
+  reduceMotion: false,
+  dayBoundaryMinutes: 0,
 };
 
 export const useSession = defineStore("session", () => {
@@ -29,6 +31,7 @@ export const useSession = defineStore("session", () => {
           : "light"
         : settings.value.theme;
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.motion = settings.value.reduceMotion ? "reduced" : "full";
     setLocale(settings.value.language);
   }
 

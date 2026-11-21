@@ -5,13 +5,14 @@ import { dayMarks } from "../ipc/client";
 import { t, type MessageKey } from "../i18n";
 import {
   addDays,
+  diaryToday,
   monthLabel,
   parseDayKey,
   startOfWeek,
-  todayKey,
   weekdayName,
   weekdayOf,
 } from "../utils/date";
+import { useSession } from "../stores/session";
 import Icon from "./Icon.vue";
 
 const props = withDefaults(
@@ -29,17 +30,23 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-const today = todayKey();
+const session = useSession();
+const today = computed(() => diaryToday(session.settings.dayBoundaryMinutes));
 const viewMonth = ref(props.selected.slice(0, 7));
 const cursor = ref(props.selected);
 const marks = ref<Record<string, number>>({});
+const slide = ref<"next" | "prev">("next");
 let loadToken = 0;
 
 watch(
   () => props.selected,
   (value) => {
     cursor.value = value;
-    if (value.slice(0, 7) !== viewMonth.value) viewMonth.value = value.slice(0, 7);
+    const month = value.slice(0, 7);
+    if (month !== viewMonth.value) {
+      slide.value = month < viewMonth.value ? "prev" : "next";
+      viewMonth.value = month;
+    }
   },
 );
 
@@ -89,7 +96,13 @@ async function load() {
 
 watch([viewMonth, () => props.reloadKey], load, { immediate: true });
 
+let swiped = false;
+
 function pick(day: string) {
+  if (swiped) {
+    swiped = false;
+    return;
+  }
   if (day.slice(0, 7) !== viewMonth.value) return;
   cursor.value = day;
   emit("select", day);
@@ -102,6 +115,7 @@ function move(delta: number) {
 }
 
 function jumpMonth(delta: number) {
+  slide.value = delta < 0 ? "prev" : "next";
   viewMonth.value = shiftMonth(viewMonth.value, delta);
   cursor.value = addDays(cursor.value, delta * 28);
 }
@@ -153,6 +167,7 @@ function onPointerDown(event: PointerEvent) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
   startX = event.clientX;
   tracking = true;
+  swiped = false;
 }
 
 function onPointerUp(event: PointerEvent) {
@@ -160,6 +175,7 @@ function onPointerUp(event: PointerEvent) {
   tracking = false;
   const delta = event.clientX - startX;
   if (Math.abs(delta) < 48) return;
+  swiped = true;
   jumpMonth(delta > 0 ? -1 : 1);
 }
 
@@ -193,35 +209,39 @@ function dotCount(day: string): number {
       </button>
     </header>
 
-    <div class="grid" tabindex="0" role="grid" @keydown="onKeydown">
-      <span v-for="(label, index) in headers" :key="index" class="weekday" role="columnheader">
-        {{ label }}
-      </span>
-      <button
-        v-for="cell in cells"
-        :key="cell.day"
-        type="button"
-        class="day"
-        role="gridcell"
-        :class="{
-          out: !cell.inMonth,
-          today: cell.day === today,
-          selected: cell.day === selected,
-          cursor: cell.day === cursor,
-        }"
-        :disabled="!cell.inMonth"
-        :aria-selected="cell.day === selected"
-        :aria-label="`${cell.day} ${weekdayName(cell.day)}`"
-        @click="pick(cell.day)"
-      >
-        <span class="number">{{ parseDayKey(cell.day).day }}</span>
-        <span class="dots" aria-hidden="true">
-          <template v-if="cell.inMonth && (marks[cell.day] ?? 0) > 0">
-            <span v-if="(marks[cell.day] ?? 0) > 3" class="more">{{ marks[cell.day] }}</span>
-            <span v-for="index in dotCount(cell.day)" :key="index" class="dot" />
-          </template>
-        </span>
-      </button>
+    <div class="grid-viewport">
+      <Transition :name="`cal-${slide}`">
+        <div :key="viewMonth" class="grid" tabindex="0" role="grid" @keydown="onKeydown">
+          <span v-for="(label, index) in headers" :key="index" class="weekday" role="columnheader">
+            {{ label }}
+          </span>
+          <button
+            v-for="cell in cells"
+            :key="cell.day"
+            type="button"
+            class="day"
+            role="gridcell"
+            :class="{
+              out: !cell.inMonth,
+              today: cell.day === today,
+              selected: cell.day === selected,
+              cursor: cell.day === cursor,
+            }"
+            :disabled="!cell.inMonth"
+            :aria-selected="cell.day === selected"
+            :aria-label="`${cell.day} ${weekdayName(cell.day)}`"
+            @click="pick(cell.day)"
+          >
+            <span class="number">{{ parseDayKey(cell.day).day }}</span>
+            <span class="dots" aria-hidden="true">
+              <template v-if="cell.inMonth && (marks[cell.day] ?? 0) > 0">
+                <span v-if="(marks[cell.day] ?? 0) > 3" class="more">{{ marks[cell.day] }}</span>
+                <span v-for="index in dotCount(cell.day)" :key="index" class="dot" />
+              </template>
+            </span>
+          </button>
+        </div>
+      </Transition>
     </div>
   </section>
 </template>
@@ -265,7 +285,13 @@ function dotCount(day: string): number {
   }
 }
 
+.grid-viewport {
+  display: grid;
+  overflow: hidden;
+}
+
 .grid {
+  grid-area: 1 / 1;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 2px;
@@ -274,8 +300,42 @@ function dotCount(day: string): number {
 
 .grid:focus-visible {
   outline: 2px solid var(--c-primary);
-  outline-offset: 2px;
+  outline-offset: -2px;
   border-radius: var(--r-sm);
+}
+
+.cal-next-enter-active,
+.cal-next-leave-active,
+.cal-prev-enter-active,
+.cal-prev-leave-active {
+  transition:
+    opacity var(--m-3) var(--ease),
+    transform var(--m-3) var(--ease);
+}
+
+.cal-next-leave-active,
+.cal-prev-leave-active {
+  pointer-events: none;
+}
+
+.cal-next-enter-from {
+  opacity: 0;
+  transform: translateX(var(--s-4));
+}
+
+.cal-next-leave-to {
+  opacity: 0;
+  transform: translateX(calc(var(--s-4) * -1));
+}
+
+.cal-prev-enter-from {
+  opacity: 0;
+  transform: translateX(calc(var(--s-4) * -1));
+}
+
+.cal-prev-leave-to {
+  opacity: 0;
+  transform: translateX(var(--s-4));
 }
 
 .weekday {
@@ -295,14 +355,13 @@ function dotCount(day: string): number {
   align-items: center;
   justify-content: center;
   gap: 1px;
-  aspect-ratio: 1;
-  min-height: 32px;
+  height: 34px;
   border-radius: var(--r-sm);
   color: var(--c-on-surface);
 }
 
 .large .day {
-  min-height: 44px;
+  height: 44px;
 }
 
 .number {

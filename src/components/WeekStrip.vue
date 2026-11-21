@@ -3,12 +3,12 @@ import { computed, ref, watch } from "vue";
 import { dayMarks } from "../ipc/client";
 import {
   addDays,
-  monthLabel,
+  diaryToday,
   parseDayKey,
-  todayKey,
   weekDays,
   weekdayName,
 } from "../utils/date";
+import { useSession } from "../stores/session";
 
 const props = defineProps<{
   selected: string;
@@ -18,9 +18,18 @@ const props = defineProps<{
 
 const emit = defineEmits<{ select: [dayKey: string] }>();
 
+const session = useSession();
 const days = computed(() => weekDays(props.selected, props.weekStart));
 const marks = ref<Record<string, number>>({});
-const today = todayKey();
+const today = computed(() => diaryToday(session.settings.dayBoundaryMinutes));
+const slide = ref<"next" | "prev">("next");
+
+watch(
+  () => days.value[0],
+  (next, previous) => {
+    if (previous && next !== previous) slide.value = next < previous ? "prev" : "next";
+  },
+);
 
 let loadToken = 0;
 
@@ -40,26 +49,35 @@ async function load() {
 watch([days, () => props.reloadKey], load, { immediate: true });
 
 let startX = 0;
+let startY = 0;
 let tracking = false;
+let swiped = false;
 
 function onPointerDown(event: PointerEvent) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
   startX = event.clientX;
+  startY = event.clientY;
   tracking = true;
-  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  swiped = false;
 }
 
 function onPointerUp(event: PointerEvent) {
   if (!tracking) return;
   tracking = false;
-  const delta = event.clientX - startX;
-  if (Math.abs(delta) < 48) return;
-  emit("select", addDays(props.selected, delta > 0 ? -7 : 7));
+  const deltaX = event.clientX - startX;
+  const deltaY = event.clientY - startY;
+  if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+  swiped = true;
+  emit("select", addDays(props.selected, deltaX > 0 ? -7 : 7));
 }
 
-const crossesMonth = computed(
-  () => days.value[0].slice(0, 7) !== days.value[6].slice(0, 7),
-);
+function pick(day: string) {
+  if (swiped) {
+    swiped = false;
+    return;
+  }
+  emit("select", day);
+}
 
 function dotCount(day: string): number {
   const count = marks.value[day] ?? 0;
@@ -75,24 +93,27 @@ function dayNumber(day: string): number {
 
 <template>
   <div class="week" @pointerdown="onPointerDown" @pointerup="onPointerUp">
-    <div v-if="crossesMonth" class="month">{{ monthLabel(days[3]) }}</div>
-    <div class="grid">
-      <button
-        v-for="day in days"
-        :key="day"
-        type="button"
-        class="cell"
-        :class="{ today: day === today, selected: day === selected }"
-        :aria-pressed="day === selected"
-        @click="emit('select', day)"
-      >
-        <span class="weekday">{{ weekdayName(day) }}</span>
-        <span class="number">{{ dayNumber(day) }}</span>
-        <span class="dots" aria-hidden="true">
-          <span v-if="(marks[day] ?? 0) > 3" class="more">{{ marks[day] }}</span>
-          <span v-for="index in dotCount(day)" :key="index" class="dot" />
-        </span>
-      </button>
+    <div class="viewport">
+      <Transition :name="`week-${slide}`">
+        <div :key="days[0]" class="grid">
+          <button
+            v-for="day in days"
+            :key="day"
+            type="button"
+            class="cell"
+            :class="{ today: day === today, selected: day === selected }"
+            :aria-pressed="day === selected"
+            @click="pick(day)"
+          >
+            <span class="weekday">{{ weekdayName(day) }}</span>
+            <span class="number">{{ dayNumber(day) }}</span>
+            <span class="dots" aria-hidden="true">
+              <span v-if="(marks[day] ?? 0) > 3" class="more">{{ marks[day] }}</span>
+              <span v-for="index in dotCount(day)" :key="index" class="dot" />
+            </span>
+          </button>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -108,20 +129,52 @@ function dayNumber(day: string): number {
   user-select: none;
 }
 
-.month {
-  position: absolute;
-  top: 2px;
-  inset-inline-end: var(--s-3);
-  font-size: var(--t-caption);
-  line-height: var(--t-caption-lh);
-  color: var(--c-on-surface-muted);
+.viewport {
+  display: grid;
+  height: 100%;
+  overflow: hidden;
 }
 
 .grid {
+  grid-area: 1 / 1;
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: var(--s-1);
   height: 100%;
+}
+
+.week-next-enter-active,
+.week-next-leave-active,
+.week-prev-enter-active,
+.week-prev-leave-active {
+  transition:
+    opacity var(--m-2) var(--ease),
+    transform var(--m-2) var(--ease);
+}
+
+.week-next-leave-active,
+.week-prev-leave-active {
+  pointer-events: none;
+}
+
+.week-next-enter-from {
+  opacity: 0;
+  transform: translateX(var(--s-4));
+}
+
+.week-next-leave-to {
+  opacity: 0;
+  transform: translateX(calc(var(--s-4) * -1));
+}
+
+.week-prev-enter-from {
+  opacity: 0;
+  transform: translateX(calc(var(--s-4) * -1));
+}
+
+.week-prev-leave-to {
+  opacity: 0;
+  transform: translateX(var(--s-4));
 }
 
 .cell {

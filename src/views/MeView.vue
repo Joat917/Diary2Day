@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { mdiFolderOpenOutline, mdiRestore, mdiTrashCanOutline } from "@mdi/js";
+import { mdiChevronDown, mdiFolderOpenOutline, mdiRestore, mdiTrashCanOutline } from "@mdi/js";
 import {
   dataInfo,
   journalEmptyTrash,
@@ -13,7 +13,12 @@ import {
 import type { DataInfo, JournalSummary, Theme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
 import { useSession } from "../stores/session";
-import { formatBytes, formatCardDate } from "../utils/date";
+import {
+  formatBoundary,
+  formatBytes,
+  formatCardDate,
+  parseBoundary,
+} from "../utils/date";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import Icon from "../components/Icon.vue";
 import StateBlock from "../components/StateBlock.vue";
@@ -73,6 +78,20 @@ async function setDateFormat(value: string) {
 
 async function toggleIndent() {
   await session.patch({ indentFirstLine: !session.settings.indentFirstLine });
+}
+
+const boundaryValue = computed(() =>
+  formatBoundary(session.settings.dayBoundaryMinutes),
+);
+
+async function setDayBoundary(value: string) {
+  const minutes = parseBoundary(value);
+  if (minutes === session.settings.dayBoundaryMinutes) return;
+  await session.patch({ dayBoundaryMinutes: minutes });
+}
+
+async function toggleReduceMotion() {
+  await session.patch({ reduceMotion: !session.settings.reduceMotion });
 }
 
 async function openFolder() {
@@ -161,14 +180,30 @@ onBeforeUnmount(() => unlisten?.());
           </div>
           <div class="row">
             <span class="label">{{ t("me.language") }}</span>
-            <select
-              class="select"
-              :value="session.settings.language"
-              @change="setLanguage(($event.target as HTMLSelectElement).value)"
+            <span class="select-wrap">
+              <select
+                class="select"
+                :value="session.settings.language"
+                @change="setLanguage(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="zh-CN">中文</option>
+                <option value="en">English</option>
+              </select>
+              <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
+            </span>
+          </div>
+          <div class="row">
+            <span class="label">{{ t("me.reduceMotion") }}</span>
+            <button
+              class="switch"
+              type="button"
+              role="switch"
+              :aria-checked="session.settings.reduceMotion"
+              :class="{ on: session.settings.reduceMotion }"
+              @click="toggleReduceMotion"
             >
-              <option value="zh-CN">中文</option>
-              <option value="en">English</option>
-            </select>
+              <span class="knob" />
+            </button>
           </div>
         </div>
       </section>
@@ -178,27 +213,37 @@ onBeforeUnmount(() => unlisten?.());
         <div class="rows">
           <div class="row">
             <span class="label">{{ t("me.weekStart") }}</span>
-            <select
-              class="select"
-              :value="session.settings.weekStart"
-              @change="setWeekStart(Number(($event.target as HTMLSelectElement).value))"
-            >
-              <option v-for="option in weekdayOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
+            <span class="select-wrap">
+              <select
+                class="select"
+                :value="session.settings.weekStart"
+                @change="setWeekStart(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option
+                  v-for="option in weekdayOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
+            </span>
           </div>
           <div class="row">
             <span class="label">{{ t("me.dateFormat") }}</span>
-            <select
-              class="select"
-              :value="session.settings.dateFormat"
-              @change="setDateFormat(($event.target as HTMLSelectElement).value)"
-            >
-              <option value="slash">{{ t("me.dateFormat.slash") }}</option>
-              <option value="short">{{ t("me.dateFormat.short") }}</option>
-              <option value="zh">{{ t("me.dateFormat.zh") }}</option>
-            </select>
+            <span class="select-wrap">
+              <select
+                class="select"
+                :value="session.settings.dateFormat"
+                @change="setDateFormat(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="slash">{{ t("me.dateFormat.slash") }}</option>
+                <option value="short">{{ t("me.dateFormat.short") }}</option>
+                <option value="zh">{{ t("me.dateFormat.zh") }}</option>
+              </select>
+              <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
+            </span>
           </div>
         </div>
       </section>
@@ -206,6 +251,21 @@ onBeforeUnmount(() => unlisten?.());
       <section class="group">
         <h2 class="group-title">{{ t("me.recording") }}</h2>
         <div class="rows">
+          <div class="row">
+            <div class="row-main">
+              <span class="label">{{ t("me.dayBoundary") }}</span>
+              <span class="sub">{{ t("me.dayBoundaryHint") }}</span>
+            </div>
+            <input
+              class="select time-input"
+              type="time"
+              min="00:00"
+              max="07:59"
+              step="60"
+              :value="boundaryValue"
+              @change="setDayBoundary(($event.target as HTMLInputElement).value)"
+            />
+          </div>
           <div class="row">
             <span class="label">{{ t("me.indent") }}</span>
             <button
@@ -272,7 +332,13 @@ onBeforeUnmount(() => unlisten?.());
             <div class="trash-main">
               <p class="trash-title">{{ item.title || t("common.untitled") }}</p>
               <p class="trash-meta">
-                {{ formatCardDate(item.recorded_at, item.recorded_off) }}
+                {{
+                  formatCardDate(
+                    item.recorded_at,
+                    item.recorded_off,
+                    session.settings.dayBoundaryMinutes,
+                  )
+                }}
               </p>
             </div>
             <div class="trash-actions">
@@ -407,6 +473,19 @@ onBeforeUnmount(() => unlisten?.());
   color: var(--c-on-surface);
 }
 
+.row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sub {
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  color: var(--c-on-surface-muted);
+}
+
 .value {
   color: var(--c-on-surface-muted);
   font-size: var(--t-small);
@@ -445,13 +524,43 @@ onBeforeUnmount(() => unlisten?.());
   box-shadow: var(--e-1);
 }
 
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
 .select {
-  border: none;
-  background: transparent;
-  color: var(--c-primary);
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 34px;
+  padding-block: var(--s-1);
+  padding-inline: var(--s-3) var(--s-7);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  color: var(--c-on-surface);
   font-size: var(--t-small);
-  text-align: end;
-  padding: var(--s-1);
+  cursor: pointer;
+}
+
+.select:focus-visible {
+  border-color: var(--c-primary);
+  outline: none;
+}
+
+.time-input {
+  padding-inline: var(--s-3);
+  font-variant-numeric: tabular-nums;
+  color-scheme: light dark;
+}
+
+.select-chevron {
+  position: absolute;
+  inset-inline-end: var(--s-2);
+  color: var(--c-on-surface-muted);
+  pointer-events: none;
 }
 
 .switch {

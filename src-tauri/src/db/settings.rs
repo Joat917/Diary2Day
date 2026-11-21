@@ -16,6 +16,8 @@ pub struct Settings {
     pub show_stats_card: bool,
     pub quick_record: bool,
     pub lock_leave_delay_s: u32,
+    pub reduce_motion: bool,
+    pub day_boundary_minutes: u32,
 }
 
 impl Default for Settings {
@@ -30,6 +32,8 @@ impl Default for Settings {
             show_stats_card: true,
             quick_record: true,
             lock_leave_delay_s: 60,
+            reduce_motion: false,
+            day_boundary_minutes: 0,
         }
     }
 }
@@ -44,6 +48,8 @@ const KEYS: &[&str] = &[
     "showStatsCard",
     "quickRecord",
     "lockLeaveDelayS",
+    "reduceMotion",
+    "dayBoundaryMinutes",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -75,6 +81,12 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
         show_stats_card: read_field(conn, "showStatsCard", default.show_stats_card),
         quick_record: read_field(conn, "quickRecord", default.quick_record),
         lock_leave_delay_s: read_field(conn, "lockLeaveDelayS", default.lock_leave_delay_s),
+        reduce_motion: read_field(conn, "reduceMotion", default.reduce_motion),
+        day_boundary_minutes: read_field(
+            conn,
+            "dayBoundaryMinutes",
+            default.day_boundary_minutes,
+        ),
     })
 }
 
@@ -90,6 +102,9 @@ fn validate(settings: &Settings) -> Result<(), AppError> {
     }
     if settings.week_start > 6 {
         return Err(AppError::new("bad_setting", "周起始日超出范围"));
+    }
+    if settings.day_boundary_minutes >= 480 {
+        return Err(AppError::new("bad_setting", "每日分界点需在八点之前"));
     }
     Ok(())
 }
@@ -117,8 +132,12 @@ pub fn patch(conn: &mut Connection, patch: Value) -> Result<Settings, AppError> 
     let next: Settings = serde_json::from_value(merged)
         .map_err(|err| AppError::new("bad_setting", "设置项不合法").with_detail(err.to_string()))?;
     validate(&next)?;
+    let boundary_changed = next.day_boundary_minutes != current.day_boundary_minutes;
     let object = serde_json::to_value(&next).map_err(|err| AppError::internal(err.to_string()))?;
     let tx = conn.transaction()?;
+    if boundary_changed {
+        crate::db::journal::recompute_day_keys(&tx, next.day_boundary_minutes)?;
+    }
     if let Some(map) = object.as_object() {
         for (key, value) in map {
             write_value(&tx, key, value)?;
