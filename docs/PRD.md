@@ -96,11 +96,11 @@
 
 **不提供应用内快捷键**：没有文内查找条、没有 `Ctrl/⌘+F`、`Ctrl/⌘+Enter`、`E` 之类需要记忆的按键，移动端也不依赖快捷键。搜索跳转只做一次性的命中高亮与定位，不引入查找工具栏。
 
-### 2.6 标签 / 心情（v1 只有这两个元信息）
+### 2.6 标签 / 心情 / 天气（元信息）
 
 - **标签**：新建时查重（折叠大小写与全角），从详情页行内加，也可在编辑器里加。标签列表是"发现"tab 的一种呈现，不按标签做独立页面。
 - **心情**：固定图标集单选，17 项（见 §7）。
-- **天气、地点**：推到 M2。它们对"三个月后找回来"几乎没有帮助（没人按天气检索日记），只是让录入那一步变长。如果最后要加，地点直接并入"标签的一种"，天气只留图标不留筛选。
+- **天气**：M3 加入，固定 17 图标单选（见 §7）。它们对"三个月后找回来"几乎没有帮助（没人按天气检索日记），所以只留图标、不留筛选，录入不强制。地点不单开字段，直接作为一个标签写（如 `#杭州`），不再另设地点选择器。
 - **置顶 / 敏感标记 / 模板**：置顶留（一天多条时真有用）；模板先只做"复制上一篇内容新建"这一个动作，够用；"敏感/隐私标记"随 §5 的应用锁一起做，成本极低。
 
 ### 2.7 我的 / 设置：一个页面，不要子页面树
@@ -189,7 +189,7 @@
 
 **心情图标（17）**：angry confused cool cry dead devil excited frown happy kiss lol neutral poop sad sick tongue wink（MDI 表情图标）。
 
-**天气图标（17，若 M2 做）**：cloudy dust fog hail hazy hurricane lightning lightning-rainy pouring rainy sleet snow sunny sunny-off tornado ultraviolet windy。
+**天气图标（17，M3）**：cloudy dust fog hail hazy hurricane lightning lightning-rainy pouring rainy sleet snow sunny sunny-off tornado ultraviolet windy。
 
 **时间格式选项**：显示 `yyyy/MM/dd dddd` / `MM/dd HH:mm` / `yyyy年M月d日`；卡片 `MM/dd`；插入时间戳默认 `yyyy/MM/dd HH:mm:ss`。
 

@@ -17,6 +17,7 @@ pub struct JournalSummary {
     pub title: String,
     pub preview: String,
     pub mood: Option<String>,
+    pub weather: Option<String>,
     pub recorded_at: String,
     pub recorded_off: i32,
     pub day_key: String,
@@ -38,6 +39,7 @@ pub struct Journal {
     pub title: String,
     pub preview: String,
     pub mood: Option<String>,
+    pub weather: Option<String>,
     pub recorded_at: String,
     pub recorded_off: i32,
     pub day_key: String,
@@ -67,6 +69,7 @@ pub struct SaveInput {
     pub format: Option<String>,
     pub title: Option<String>,
     pub mood: Option<String>,
+    pub weather: Option<String>,
     pub tag_ids: Vec<String>,
     pub recorded_at: Option<String>,
     pub recorded_off: Option<i32>,
@@ -75,9 +78,29 @@ pub struct SaveInput {
     pub revision: Option<i64>,
 }
 
-const SUMMARY_COLS: &str = "id, content, title, mood, recorded_at, recorded_off, day_key, \
-                            words, asset_n, audio_n, video_n, cover_asset, pinned, sensitive, \
-                            deleted_at";
+const SUMMARY_COLS: &str = "id, content, title, mood, weather, recorded_at, recorded_off, \
+                            day_key, words, asset_n, audio_n, video_n, cover_asset, pinned, \
+                            sensitive, deleted_at";
+
+const WEATHER_CODES: [&str; 17] = [
+    "cloudy",
+    "dust",
+    "fog",
+    "hail",
+    "hazy",
+    "hurricane",
+    "lightning",
+    "lightning-rainy",
+    "pouring",
+    "rainy",
+    "sleet",
+    "snow",
+    "sunny",
+    "sunny-off",
+    "tornado",
+    "ultraviolet",
+    "windy",
+];
 
 fn escape_like(text: &str) -> String {
     text.replace('\\', "\\\\")
@@ -125,6 +148,7 @@ fn map_summary_with_needle(
         title: resolved_title,
         preview,
         mood: row.get("mood")?,
+        weather: row.get("weather")?,
         recorded_at: row.get("recorded_at")?,
         recorded_off: row.get("recorded_off")?,
         day_key: row.get("day_key")?,
@@ -236,7 +260,7 @@ fn load_tags(conn: &Connection, journal_id: &str) -> rusqlite::Result<Vec<TagDto
 pub fn get(conn: &Connection, id: &str) -> Result<Journal, AppError> {
     let found = conn
         .query_row(
-            "SELECT id, content, format, title, mood, recorded_at, recorded_off, day_key, \
+            "SELECT id, content, format, title, mood, weather, recorded_at, recorded_off, day_key, \
              created_at, updated_at, deleted_at, pinned, sensitive, words, asset_n, audio_n, \
              video_n, cover_asset, revision FROM journal WHERE id = ?1",
             [id],
@@ -253,6 +277,7 @@ pub fn get(conn: &Connection, id: &str) -> Result<Journal, AppError> {
                     title: resolved_title,
                     preview: title::preview(&content),
                     mood: row.get("mood")?,
+                    weather: row.get("weather")?,
                     recorded_at: row.get("recorded_at")?,
                     recorded_off: row.get("recorded_off")?,
                     day_key: row.get("day_key")?,
@@ -360,6 +385,11 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
     if format != "markdown" && format != "plain" {
         return Err(AppError::new("bad_format", "不支持的正文格式"));
     }
+    if let Some(code) = input.weather.as_deref()
+        && !WEATHER_CODES.contains(&code)
+    {
+        return Err(AppError::new("bad_weather", "不支持的天气"));
+    }
     let word_count = words::count_words(&input.content);
     let (asset_n, audio_n, video_n, cover_asset) = scan_assets(&input.content);
     let explicit_title = input
@@ -397,14 +427,16 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
 
         tx.execute(
             "UPDATE journal SET content = ?1, format = ?2, title = ?3, mood = ?4, \
-             recorded_at = ?5, recorded_off = ?6, day_key = ?7, updated_at = ?8, \
-             pinned = ?9, sensitive = ?10, words = ?11, asset_n = ?12, audio_n = ?13, \
-             video_n = ?14, cover_asset = ?15, revision = revision + 1 WHERE id = ?16",
+             weather = ?5, recorded_at = ?6, recorded_off = ?7, day_key = ?8, \
+             updated_at = ?9, pinned = ?10, sensitive = ?11, words = ?12, asset_n = ?13, \
+             audio_n = ?14, video_n = ?15, cover_asset = ?16, revision = revision + 1 \
+             WHERE id = ?17",
             params![
                 input.content,
                 format,
                 explicit_title,
                 input.mood,
+                input.weather,
                 recorded_at,
                 offset,
                 day,
@@ -430,16 +462,18 @@ pub fn save(conn: &mut Connection, input: SaveInput) -> Result<Journal, AppError
     } else {
         let id = uuid::Uuid::now_v7().to_string();
         tx.execute(
-            "INSERT INTO journal(id, content, format, title, mood, recorded_at, recorded_off, \
-             day_key, created_at, updated_at, pinned, sensitive, words, asset_n, audio_n, \
-             video_n, cover_asset, revision) \
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1)",
+            "INSERT INTO journal(id, content, format, title, mood, weather, recorded_at, \
+             recorded_off, day_key, created_at, updated_at, pinned, sensitive, words, asset_n, \
+             audio_n, video_n, cover_asset, revision) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13, ?14, ?15, \
+             ?16, ?17, 1)",
             params![
                 id,
                 input.content,
                 format,
                 explicit_title,
                 input.mood,
+                input.weather,
                 recorded_at,
                 offset,
                 day,
@@ -677,6 +711,7 @@ mod tests {
             format: None,
             title: None,
             mood: None,
+            weather: None,
             tag_ids: Vec::new(),
             recorded_at: Some("2026-11-21T10:00:00Z".to_string()),
             recorded_off: Some(480),

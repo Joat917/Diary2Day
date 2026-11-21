@@ -80,13 +80,14 @@ pub fn export_dir(state: &AppState, target_dir: &str) -> Result<ExportReport, Ap
             }
         }
         let yaml = format!(
-            "---\nid: {}\nrecorded_at: {}\noffset: {}\nformat: {}\nmood: {}\npinned: {}\n\
-             sensitive: {}\ntags: {}\nwords: {}\n---\n\n",
+            "---\nid: {}\nrecorded_at: {}\noffset: {}\nformat: {}\nmood: {}\nweather: {}\n\
+             pinned: {}\nsensitive: {}\ntags: {}\nwords: {}\n---\n\n",
             entry.id,
             entry.recorded_at,
             entry.recorded_off,
             entry.format,
             entry.mood.clone().unwrap_or_default(),
+            entry.weather.clone().unwrap_or_default(),
             entry.pinned,
             entry.sensitive,
             quote(&entry.tags.join(", ")),
@@ -116,6 +117,7 @@ struct ParsedMd {
     recorded_at: Option<String>,
     offset: Option<i32>,
     mood: Option<String>,
+    weather: Option<String>,
     pinned: bool,
     sensitive: bool,
     tags: Vec<String>,
@@ -128,6 +130,7 @@ fn parse_md(raw: &str) -> ParsedMd {
         recorded_at: None,
         offset: None,
         mood: None,
+        weather: None,
         pinned: false,
         sensitive: false,
         tags: Vec::new(),
@@ -162,6 +165,7 @@ fn parse_md(raw: &str) -> ParsedMd {
             "recorded_at" if !value.is_empty() => parsed.recorded_at = Some(value),
             "offset" => parsed.offset = value.parse().ok(),
             "mood" if !value.is_empty() => parsed.mood = Some(value),
+            "weather" if !value.is_empty() => parsed.weather = Some(value),
             "pinned" => parsed.pinned = value == "true",
             "sensitive" => parsed.sensitive = value == "true",
             "tags" if !value.is_empty() => {
@@ -273,6 +277,7 @@ pub fn import_dir(state: &AppState, dir: &str) -> Result<ImportReport, AppError>
                     format: Some("markdown".into()),
                     title: None,
                     mood: parsed.mood.clone(),
+                    weather: parsed.weather.clone(),
                     tag_ids: tag_ids.clone(),
                     recorded_at: parsed.recorded_at.clone(),
                     recorded_off: parsed.offset,

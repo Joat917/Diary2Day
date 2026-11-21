@@ -27,6 +27,7 @@ export interface JournalSummary {
   title: string;
   preview: string;
   mood: string | null;
+  weather: string | null;
   recorded_at: string;
   recorded_off: number;
   day_key: string;

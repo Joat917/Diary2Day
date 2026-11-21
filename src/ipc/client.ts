@@ -101,6 +101,7 @@ export interface SaveInput {
   format?: "markdown" | "plain";
   title?: string | null;
   mood?: string | null;
+  weather?: string | null;
   tagIds?: string[];
   recordedAt?: string | null;
   recordedOff?: number | null;
@@ -116,6 +117,7 @@ export function journalSave(input: SaveInput): Promise<Journal> {
     format: input.format ?? null,
     title: input.title ?? null,
     mood: input.mood ?? null,
+    weather: input.weather ?? null,
     tagIds: input.tagIds ?? [],
     recordedAt: input.recordedAt ?? null,
     recordedOff: input.recordedOff ?? null,

@@ -5,25 +5,29 @@ import {
   mdiClose,
   mdiEmoticonOutline,
   mdiPlus,
+  mdiWeatherPartlyCloudy,
 } from "@mdi/js";
 import type { Tag } from "../ipc/types";
 import { IpcError, tagCreate, tagList } from "../ipc/client";
 import { t } from "../i18n";
 import { MOODS, moodByCode } from "../constants/moods";
+import { WEATHERS, weatherByCode } from "../constants/weather";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{
   tags: Tag[];
   mood: string | null;
+  weather: string | null;
   editable: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:tags": [tags: Tag[]];
   "update:mood": [code: string | null];
+  "update:weather": [code: string | null];
 }>();
 
-const panel = ref<"mood" | "tags" | null>(null);
+const panel = ref<"mood" | "weather" | "tags" | null>(null);
 const suggestions = ref<Tag[]>([]);
 const draft = ref("");
 const busy = ref(false);
@@ -32,7 +36,10 @@ const input = ref<HTMLInputElement | null>(null);
 
 const attachedIds = computed(() => new Set(props.tags.map((tag) => tag.id)));
 const currentMood = computed(() => moodByCode(props.mood));
-const hasMeta = computed(() => props.tags.length > 0 || !!props.mood);
+const currentWeather = computed(() => weatherByCode(props.weather));
+const hasMeta = computed(
+  () => props.tags.length > 0 || !!props.mood || !!props.weather,
+);
 
 const visibleSuggestions = computed(() => {
   const needle = draft.value.trim().toLowerCase();
@@ -42,7 +49,7 @@ const visibleSuggestions = computed(() => {
     .slice(0, 8);
 });
 
-function togglePanel(which: "mood" | "tags") {
+function togglePanel(which: "mood" | "weather" | "tags") {
   if (!props.editable) return;
   const next = panel.value === which ? null : which;
   panel.value = next;
@@ -94,6 +101,11 @@ onBeforeUnmount(() => {
 
 function pickMood(code: string | null) {
   emit("update:mood", code);
+  close();
+}
+
+function pickWeather(code: string | null) {
+  emit("update:weather", code);
   close();
 }
 
@@ -158,6 +170,22 @@ async function submitDraft() {
       <span>{{ t(currentMood.labelKey) }}</span>
     </span>
 
+    <button
+      v-if="editable"
+      class="chip"
+      :class="{ active: !!currentWeather }"
+      type="button"
+      :aria-label="currentWeather ? t(currentWeather.labelKey) : t('meta.weather')"
+      @click="togglePanel('weather')"
+    >
+      <Icon :path="currentWeather?.path ?? mdiWeatherPartlyCloudy" :size="16" />
+      <span>{{ currentWeather ? t(currentWeather.labelKey) : t("meta.weather") }}</span>
+    </button>
+    <span v-else-if="currentWeather" class="chip static">
+      <Icon :path="currentWeather.path" :size="16" />
+      <span>{{ t(currentWeather.labelKey) }}</span>
+    </span>
+
     <span v-for="tag in tags" :key="tag.id" class="chip static">
       <span>#{{ tag.name }}</span>
       <button
@@ -183,7 +211,13 @@ async function submitDraft() {
 
     <div v-if="panel" class="panel" role="dialog">
       <div class="panel-head">
-        <span>{{ panel === "mood" ? t("meta.mood") : t("meta.tags") }}</span>
+        <span>{{
+          panel === "mood"
+            ? t("meta.mood")
+            : panel === "weather"
+              ? t("meta.weather")
+              : t("meta.tags")
+        }}</span>
         <button class="panel-close" type="button" :aria-label="t('common.close')" @click="close">
           <Icon :path="mdiClose" :size="16" />
         </button>
@@ -211,6 +245,31 @@ async function submitDraft() {
         >
           <Icon :path="item.path" :size="24" />
           <Icon v-if="item.code === mood" class="mood-check" :path="mdiCheck" :size="12" />
+        </button>
+      </div>
+
+      <div v-else-if="panel === 'weather'" class="mood-grid">
+        <button
+          class="mood"
+          type="button"
+          :class="{ active: !weather }"
+          :aria-label="t('meta.noWeather')"
+          @click="pickWeather(null)"
+        >
+          <Icon :path="mdiClose" :size="20" />
+        </button>
+        <button
+          v-for="item in WEATHERS"
+          :key="item.code"
+          class="mood"
+          type="button"
+          :class="{ active: item.code === weather }"
+          :aria-label="t(item.labelKey)"
+          :title="t(item.labelKey)"
+          @click="pickWeather(item.code)"
+        >
+          <Icon :path="item.path" :size="24" />
+          <Icon v-if="item.code === weather" class="mood-check" :path="mdiCheck" :size="12" />
         </button>
       </div>
 

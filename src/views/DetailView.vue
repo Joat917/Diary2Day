@@ -117,6 +117,7 @@ async function writeJournal(value: string) {
     content: value,
     format: item.format,
     mood: item.mood,
+    weather: item.weather,
     tagIds: item.tags.map((tag) => tag.id),
     recordedAt: item.recorded_at,
     recordedOff: item.recorded_off,
@@ -144,6 +145,13 @@ async function updateMood(code: string | null) {
   const item = journal.value;
   if (!item) return;
   item.mood = code;
+  await saveMeta();
+}
+
+async function updateWeather(code: string | null) {
+  const item = journal.value;
+  if (!item) return;
+  item.weather = code;
   await saveMeta();
 }
 
@@ -508,9 +516,11 @@ watch(
       v-if="journal && !loading"
       :tags="journal.tags"
       :mood="journal.mood"
+      :weather="journal.weather"
       :editable="editing"
       @update:tags="updateTags"
       @update:mood="updateMood"
+      @update:weather="updateWeather"
     />
 
     <div class="body">

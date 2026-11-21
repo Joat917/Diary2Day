@@ -10,6 +10,7 @@ import {
 import type { JournalSummary } from "../ipc/types";
 import { t } from "../i18n";
 import { moodByCode } from "../constants/moods";
+import { weatherByCode } from "../constants/weather";
 import { useSession } from "../stores/session";
 import { assetFileUrl, thumbUrl } from "../utils/assetUrl";
 import { formatCardDate } from "../utils/date";
@@ -31,6 +32,7 @@ defineEmits<{ open: [id: string] }>();
 
 const title = computed(() => props.item.title || t("common.untitled"));
 const mood = computed(() => moodByCode(props.item.mood));
+const weather = computed(() => weatherByCode(props.item.weather));
 const thumb = computed(() => thumbUrl(props.item.cover_asset));
 const thumbFallback = computed(() => assetFileUrl(props.item.cover_asset));
 const thumbStage = ref<"thumb" | "file" | "broken">("thumb");
@@ -52,7 +54,8 @@ const hasMeta = computed(
     props.item.audio_n > 0 ||
     props.item.video_n > 0 ||
     props.item.pinned ||
-    !!mood.value,
+    !!mood.value ||
+    !!weather.value,
 );
 
 const previewParts = computed(() => {
@@ -104,6 +107,9 @@ const previewParts = computed(() => {
           }}</span>
           <span v-if="mood" class="mood">
             <Icon :path="mood.path" :size="16" :label="t(mood.labelKey)" />
+          </span>
+          <span v-if="weather" class="weather">
+            <Icon :path="weather.path" :size="16" :label="t(weather.labelKey)" />
           </span>
           <span v-if="item.words">{{ t("today.words", { n: item.words }) }}</span>
           <span v-if="item.asset_n > 0" class="badge">
@@ -241,7 +247,8 @@ const previewParts = computed(() => {
   gap: 2px;
 }
 
-.mood {
+.mood,
+.weather {
   display: inline-flex;
   color: var(--c-on-surface-muted);
 }

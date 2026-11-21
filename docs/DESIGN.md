@@ -20,7 +20,7 @@ src-tauri/src/
                     client.ts 的 describeError 把三者拼成可读文本，所有错误态直接展示
   db/
     conn.rs         open + PRAGMA + busy_timeout + with_db
-    migrate.rs      版本化迁移（schema/0001_init.sql、0002_m2.sql、0003_media_counts.sql，include_str! 按序执行）
+    migrate.rs      版本化迁移（schema/0001_init.sql、0002_m2.sql、0003_media_counts.sql、0004_m3.sql，include_str! 按序执行）
     journal.rs      条目 upsert / 列表 / 详情 / 软删 / 恢复 / purge / 置顶 / 敏感
     tag.rs          标签 CRUD + 合并 + 引用计数
     search.rs       FTS 与短查询兜底，策略选择集中在这一个函数里
@@ -72,6 +72,7 @@ CREATE TABLE journal (
   format       TEXT    NOT NULL DEFAULT 'markdown'  CHECK (format IN ('markdown','plain')),
   title        TEXT,                                -- NULL = 列表用首行派生
   mood         TEXT,                                -- NULL 或 17 个 code 之一
+  weather      TEXT,                                -- NULL 或 17 个 code 之一（0004_m3）
   recorded_at  TEXT    NOT NULL,                    -- UTC ISO8601
   recorded_off INTEGER NOT NULL DEFAULT 0,          -- 记录时的本地偏移，分钟
   day_key      TEXT    NOT NULL,                    -- YYYY-MM-DD
@@ -161,9 +162,9 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 | 命令 | 入参 → 返回 | 备注 |
 |---|---|---|
-| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 排序固定 `pinned DESC, recorded_at DESC, id DESC`，游标按同一顺序推进。摘要字段：id / 派生 title / `preview`(300 字符) / mood / day_key / words / `asset_n` / `audio_n` / `video_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
+| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 排序固定 `pinned DESC, recorded_at DESC, id DESC`，游标按同一顺序推进。摘要字段：id / 派生 title / `preview`(300 字符) / mood / weather / day_key / words / `asset_n` / `audio_n` / `video_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
 | `journal_get` | `id` → `Journal`（全量 + tag 对象） | |
-| `journal_save` | `id? content format title mood tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`audio_n`/`video_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空内容的新建由前端拦截（§5） |
+| `journal_save` | `id? content format title mood weather tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`weather` 只接受 17 个固定 code 或 null，其余返回 `bad_weather`。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`audio_n`/`video_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空内容的新建由前端拦截（§5） |
 | `journal_delete` | `id` → `day_key` | 软删；同事务更新 `day_mark` |
 | `journal_restore` / `journal_purge` | `id` / 无参 | purge 由 janitor 调，UI 也提供"清空回收站" |
 | `journal_trash_list` | `limit cursor` → `JournalPage` | |
@@ -238,7 +239,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 - 写连接只服务交互；导出、备份、一致性校验走第二个只读连接（`Connection::open_with_flags(Readonly)` + `PRAGMA query_only=ON`，WAL 允许并发读）。
 - **临界区内只跑同步代码。** 所有数据库操作写进 `tokio::task::spawn_blocking(move || …)`，锁在闭包里进出。`db/conn.rs` 提供 `with_db(|c| …)` 与 `with_db_ro(|c| …)`，业务代码经由这两个 helper 取连接，锁的进出集中在此。
 
-`AppError` 是带 `code` 的枚举（`tag_exists`、`journal_not_found`、`bad_revision`、`unsupported_ext`、`asset_too_large`、`restore_version_mismatch`、`backup_manifest_invalid`、`cancelled`、`io`、`sqlite`、`internal`），序列化固定为 `{code, msg, detail?}`。前端按 `code` 分支决定文案与出路。
+`AppError` 是带 `code` 的枚举（`tag_exists`、`journal_not_found`、`bad_revision`、`bad_weather`、`unsupported_ext`、`asset_too_large`、`restore_version_mismatch`、`backup_manifest_invalid`、`cancelled`、`io`、`sqlite`、`internal`），序列化固定为 `{code, msg, detail?}`。前端按 `code` 分支决定文案与出路。
 
 `panic = "abort"` 下命令里的 panic 直接终止进程。内核的错误处理规则：每个失败路径返回 `Result`；索引访问一律 `get()`；`spawn_blocking` 闭包返回 `Result`；`clippy.toml` 里 `unwrap_used.behavior = "deny"`、`expect_used.behavior = "deny"`（§9）。
 
@@ -313,7 +314,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 **搜索跳转高亮**（纯前端，M2 起替代文内查找）：`DetailView` 在预览渲染后按 `?q=` 用 `TreeWalker` 把命中文字包进 `<mark class="dd-hit">`（上限 200 处），再把第一处 `scrollIntoView({block:'center'})`。因此不依赖 `search_locate`，也不改编辑器源文本；不提供查找条、`n/N` 计数或快捷键，编辑态不出现任何标记。代价是超长文只标前 200 处，与有界 LIKE 是同一个取舍。全局搜索仍走 `search_query`。
 
 **6.4 导出人可读目录**
-取全部存活条目 → 在用户选择的目录下新建 `Diary2Day-<ts>/`：每条 `<day_key>-<id>.md`（front-matter：`id / recorded_at / offset / format / mood / pinned / sensitive / tags / words`；正文只做一件事——把 `ddasset://{kind}/{name}` 换成相对路径 `assets/{name}`，其余字节照抄）+ 附件按需复制到 `assets/` 子目录（`.thumbs/` 留在原地，导出的是原图）→ 每 20 条 emit 一次进度。桌面入口用 `plugin-dialog`；移动端经 `data_export_android` 的 `pick_dir` 接入 SAF（§3.2）。
+取全部存活条目 → 在用户选择的目录下新建 `Diary2Day-<ts>/`：每条 `<day_key>-<id>.md`（front-matter：`id / recorded_at / offset / format / mood / weather / pinned / sensitive / tags / words`；正文只做一件事——把 `ddasset://{kind}/{name}` 换成相对路径 `assets/{name}`，其余字节照抄）+ 附件按需复制到 `assets/` 子目录（`.thumbs/` 留在原地，导出的是原图）→ 每 20 条 emit 一次进度。桌面入口用 `plugin-dialog`；移动端经 `data_export_android` 的 `pick_dir` 接入 SAF（§3.2）。
 **文件名带 id** 保证导入对称：`md_doc.rs` 同一份 front-matter 读写 + 路径双向映射被 export 和 import 共用，重复导入同一目录按 `id` upsert。测试判据："导出 → 导入 → 导出，目录内容逐字节相等（除 `updated_at`）"。
 
 **6.5 备份 / 恢复 / 锁**

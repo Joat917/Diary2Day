@@ -9,6 +9,7 @@ pub struct ExportEntry {
     pub content: String,
     pub format: String,
     pub mood: Option<String>,
+    pub weather: Option<String>,
     pub recorded_at: String,
     pub recorded_off: i32,
     pub day_key: String,
@@ -20,7 +21,7 @@ pub struct ExportEntry {
 
 pub fn live_entries(conn: &Connection) -> Result<Vec<ExportEntry>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, content, format, mood, recorded_at, recorded_off, day_key, pinned, \
+        "SELECT id, content, format, mood, weather, recorded_at, recorded_off, day_key, pinned, \
          sensitive, words FROM journal WHERE deleted_at IS NULL \
          ORDER BY day_key, recorded_at, id",
     )?;
@@ -30,12 +31,13 @@ pub fn live_entries(conn: &Connection) -> Result<Vec<ExportEntry>, AppError> {
             content: row.get(1)?,
             format: row.get(2)?,
             mood: row.get(3)?,
-            recorded_at: row.get(4)?,
-            recorded_off: row.get(5)?,
-            day_key: row.get(6)?,
-            pinned: row.get::<_, i64>(7)? != 0,
-            sensitive: row.get::<_, i64>(8)? != 0,
-            words: row.get(9)?,
+            weather: row.get(4)?,
+            recorded_at: row.get(5)?,
+            recorded_off: row.get(6)?,
+            day_key: row.get(7)?,
+            pinned: row.get::<_, i64>(8)? != 0,
+            sensitive: row.get::<_, i64>(9)? != 0,
+            words: row.get(10)?,
             tags: Vec::new(),
         })
     })?;

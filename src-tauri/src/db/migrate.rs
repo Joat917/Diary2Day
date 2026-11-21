@@ -6,6 +6,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("schema/0001_init.sql")),
     (2, include_str!("schema/0002_m2.sql")),
     (3, include_str!("schema/0003_media_counts.sql")),
+    (4, include_str!("schema/0004_m3.sql")),
 ];
 
 pub fn run(conn: &mut Connection) -> Result<(), AppError> {

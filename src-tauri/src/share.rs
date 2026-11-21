@@ -145,6 +145,7 @@ pub fn drain(state: &AppState) -> Result<Option<ShareReport>, AppError> {
                 format: Some("markdown".to_string()),
                 title: None,
                 mood: None,
+                weather: None,
                 tag_ids: Vec::new(),
                 recorded_at: None,
                 recorded_off: None,
