@@ -22,6 +22,10 @@ dist-ssr
 *.sln
 *.sw?
 .qoder
+.editorconfig
 
 # Vditor runtime assets (synced from node_modules)
 public/vditor
+
+*.jks
+*.p12

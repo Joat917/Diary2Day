@@ -3,6 +3,7 @@ package com.joat917.diary2day
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Parcelable
 import android.provider.OpenableColumns
 import androidx.activity.enableEdgeToEdge
 import org.json.JSONArray
@@ -43,7 +44,9 @@ class MainActivity : TauriActivity() {
     if (action == Intent.ACTION_SEND) {
       extractUri(intent.getParcelableExtra(Intent.EXTRA_STREAM))?.let { uris.add(it) }
     } else {
-      intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)?.forEach { value ->
+      val streams: ArrayList<Parcelable>? =
+        intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+      streams?.forEach { value ->
         extractUri(value)?.let { uris.add(it) }
       }
     }
