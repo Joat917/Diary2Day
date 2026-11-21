@@ -43,6 +43,9 @@ const { isNarrow, isWide } = useBreakpoint();
 
 const journal = ref<Journal | null>(null);
 const content = ref("");
+const draftTags = ref<Tag[]>([]);
+const draftMood = ref<string | null>(null);
+const draftWeather = ref<string | null>(null);
 const loading = ref(true);
 const missing = ref(false);
 const failReason = ref<string | null>(null);
@@ -54,6 +57,15 @@ const viewerSrc = ref<string | null>(null);
 
 const embedded = computed(() => props.entryId != null);
 const entryId = computed(() => props.entryId ?? String(route.params.id ?? ""));
+const isDraft = computed(
+  () => !loading.value && !journal.value && entryId.value === "new",
+);
+const showMeta = computed(() => !loading.value && (!!journal.value || isDraft.value));
+const metaTags = computed(() => (journal.value ? journal.value.tags : draftTags.value));
+const metaMood = computed(() => (journal.value ? journal.value.mood : draftMood.value));
+const metaWeather = computed(() =>
+  journal.value ? journal.value.weather : draftWeather.value,
+);
 const metaSaving = ref(false);
 const deleteOpen = ref(false);
 const pendingFocus = ref(false);
@@ -102,10 +114,16 @@ async function writeJournal(value: string) {
     const stamp = recordedAtNow();
     const saved = await journalSave({
       content: value,
+      mood: draftMood.value,
+      weather: draftWeather.value,
+      tagIds: draftTags.value.map((tag) => tag.id),
       recordedAt: stamp.recordedAt,
       recordedOff: stamp.recordedOff,
     });
     journal.value = saved;
+    draftTags.value = [];
+    draftMood.value = null;
+    draftWeather.value = null;
     skipLoadId = saved.id;
     if (!leaving && !embedded.value) {
       await router.replace({ path: `/j/${saved.id}`, query: { edit: "1" } });
@@ -136,21 +154,30 @@ const {
 
 async function updateTags(tags: Tag[]) {
   const item = journal.value;
-  if (!item) return;
+  if (!item) {
+    draftTags.value = tags;
+    return;
+  }
   item.tags = tags;
   await saveMeta();
 }
 
 async function updateMood(code: string | null) {
   const item = journal.value;
-  if (!item) return;
+  if (!item) {
+    draftMood.value = code;
+    return;
+  }
   item.mood = code;
   await saveMeta();
 }
 
 async function updateWeather(code: string | null) {
   const item = journal.value;
-  if (!item) return;
+  if (!item) {
+    draftWeather.value = code;
+    return;
+  }
   item.weather = code;
   await saveMeta();
 }
@@ -282,6 +309,9 @@ async function load() {
   if (id === "new") {
     journal.value = null;
     content.value = "";
+    draftTags.value = [];
+    draftMood.value = null;
+    draftWeather.value = null;
     loadedAssets = [];
     missing.value = false;
     failReason.value = null;
@@ -295,6 +325,9 @@ async function load() {
   loading.value = true;
   missing.value = false;
   failReason.value = null;
+  draftTags.value = [];
+  draftMood.value = null;
+  draftWeather.value = null;
   try {
     const item = await journalGet(id);
     journal.value = item;
@@ -513,10 +546,10 @@ watch(
     <p v-if="saveState === 'error' && saveError" class="save-detail">{{ saveError }}</p>
 
     <MetaChips
-      v-if="journal && !loading"
-      :tags="journal.tags"
-      :mood="journal.mood"
-      :weather="journal.weather"
+      v-if="showMeta"
+      :tags="metaTags"
+      :mood="metaMood"
+      :weather="metaWeather"
       :editable="editing"
       @update:tags="updateTags"
       @update:mood="updateMood"

@@ -21,6 +21,7 @@ pub struct JournalSummary {
     pub recorded_at: String,
     pub recorded_off: i32,
     pub day_key: String,
+    pub updated_at: String,
     pub words: i64,
     pub asset_n: i64,
     pub audio_n: i64,
@@ -79,8 +80,8 @@ pub struct SaveInput {
 }
 
 const SUMMARY_COLS: &str = "id, content, title, mood, weather, recorded_at, recorded_off, \
-                            day_key, words, asset_n, audio_n, video_n, cover_asset, pinned, \
-                            sensitive, deleted_at";
+                            day_key, updated_at, words, asset_n, audio_n, video_n, cover_asset, \
+                            pinned, sensitive, deleted_at";
 
 const WEATHER_CODES: [&str; 17] = [
     "cloudy",
@@ -152,6 +153,7 @@ fn map_summary_with_needle(
         recorded_at: row.get("recorded_at")?,
         recorded_off: row.get("recorded_off")?,
         day_key: row.get("day_key")?,
+        updated_at: row.get("updated_at")?,
         words: row.get("words")?,
         asset_n: row.get("asset_n")?,
         audio_n: row.get("audio_n")?,

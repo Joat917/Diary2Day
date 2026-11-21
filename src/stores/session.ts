@@ -16,6 +16,7 @@ const defaults: Settings = {
   lockLeaveDelayS: 60,
   reduceMotion: false,
   dayBoundaryMinutes: 0,
+  cardTime: "recorded",
 };
 
 export const useSession = defineStore("session", () => {

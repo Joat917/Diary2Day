@@ -44,6 +44,7 @@ const hasMeta = computed(
 const visibleSuggestions = computed(() => {
   const needle = draft.value.trim().toLowerCase();
   return suggestions.value
+    .filter((tag) => tag.usage > 0)
     .filter((tag) => !attachedIds.value.has(tag.id))
     .filter((tag) => !needle || tag.name.toLowerCase().includes(needle))
     .slice(0, 8);

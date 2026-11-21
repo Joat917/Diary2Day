@@ -18,6 +18,7 @@ pub struct Settings {
     pub lock_leave_delay_s: u32,
     pub reduce_motion: bool,
     pub day_boundary_minutes: u32,
+    pub card_time: String,
 }
 
 impl Default for Settings {
@@ -34,6 +35,7 @@ impl Default for Settings {
             lock_leave_delay_s: 60,
             reduce_motion: false,
             day_boundary_minutes: 0,
+            card_time: "recorded".into(),
         }
     }
 }
@@ -50,6 +52,7 @@ const KEYS: &[&str] = &[
     "lockLeaveDelayS",
     "reduceMotion",
     "dayBoundaryMinutes",
+    "cardTime",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -87,6 +90,7 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
             "dayBoundaryMinutes",
             default.day_boundary_minutes,
         ),
+        card_time: read_field(conn, "cardTime", default.card_time),
     })
 }
 
@@ -105,6 +109,9 @@ fn validate(settings: &Settings) -> Result<(), AppError> {
     }
     if settings.day_boundary_minutes >= 480 {
         return Err(AppError::new("bad_setting", "每日分界点需在八点之前"));
+    }
+    if !matches!(settings.card_time.as_str(), "recorded" | "updated") {
+        return Err(AppError::new("bad_setting", "未知卡片时间来源"));
     }
     Ok(())
 }

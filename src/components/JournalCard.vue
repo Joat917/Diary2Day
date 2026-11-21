@@ -13,7 +13,7 @@ import { moodByCode } from "../constants/moods";
 import { weatherByCode } from "../constants/weather";
 import { useSession } from "../stores/session";
 import { assetFileUrl, thumbUrl } from "../utils/assetUrl";
-import { formatCardDate } from "../utils/date";
+import { formatCardTime } from "../utils/date";
 import Icon from "./Icon.vue";
 
 const session = useSession();
@@ -33,6 +33,15 @@ defineEmits<{ open: [id: string] }>();
 const title = computed(() => props.item.title || t("common.untitled"));
 const mood = computed(() => moodByCode(props.item.mood));
 const weather = computed(() => weatherByCode(props.item.weather));
+const timeLabel = computed(() =>
+  formatCardTime(
+    props.item.recorded_at,
+    props.item.recorded_off,
+    props.item.updated_at,
+    session.settings.cardTime === "updated",
+    session.settings.dayBoundaryMinutes,
+  ),
+);
 const thumb = computed(() => thumbUrl(props.item.cover_asset));
 const thumbFallback = computed(() => assetFileUrl(props.item.cover_asset));
 const thumbStage = ref<"thumb" | "file" | "broken">("thumb");
@@ -98,13 +107,7 @@ const previewParts = computed(() => {
           </template>
         </p>
         <div v-if="hasMeta" class="meta">
-          <span class="time">{{
-            formatCardDate(
-              item.recorded_at,
-              item.recorded_off,
-              session.settings.dayBoundaryMinutes,
-            )
-          }}</span>
+          <span class="time">{{ timeLabel }}</span>
           <span v-if="mood" class="mood">
             <Icon :path="mood.path" :size="16" :label="t(mood.labelKey)" />
           </span>

@@ -22,6 +22,7 @@ let timer: number | undefined;
 let token = 0;
 
 const filtersActive = computed(() => !!tagId.value);
+const liveTags = computed(() => tags.value.filter((tag) => tag.usage > 0));
 
 const sectionLabel = computed(() => {
   if (text.value.trim()) return t("discover.results");
@@ -64,6 +65,10 @@ async function run() {
 async function loadTags() {
   try {
     tags.value = await tagList();
+    if (tagId.value && !liveTags.value.some((tag) => tag.id === tagId.value)) {
+      tagId.value = null;
+      void run();
+    }
   } catch {
     tags.value = [];
   }
@@ -129,7 +134,7 @@ onBeforeUnmount(() => {
       </div>
       <p v-if="partial" class="partial">{{ t("discover.partial") }}</p>
 
-      <div v-if="!text.trim() && tags.length" class="tag-bar">
+      <div v-if="!text.trim() && liveTags.length" class="tag-bar">
         <button
           class="tag-chip"
           :class="{ active: !tagId }"
@@ -139,7 +144,7 @@ onBeforeUnmount(() => {
           {{ t("discover.allTags") }}
         </button>
         <button
-          v-for="tag in tags"
+          v-for="tag in liveTags"
           :key="tag.id"
           class="tag-chip"
           :class="{ active: tagId === tag.id }"

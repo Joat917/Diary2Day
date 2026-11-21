@@ -162,7 +162,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 | 命令 | 入参 → 返回 | 备注 |
 |---|---|---|
-| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 排序固定 `pinned DESC, recorded_at DESC, id DESC`，游标按同一顺序推进。摘要字段：id / 派生 title / `preview`(300 字符) / mood / weather / day_key / words / `asset_n` / `audio_n` / `video_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
+| `journal_list` | `day_key? range? tag_id? mood? include_trash limit cursor` → `JournalPage` | 排序固定 `pinned DESC, recorded_at DESC, id DESC`，游标按同一顺序推进。摘要字段：id / 派生 title / `preview`(300 字符) / mood / weather / day_key / updated_at / words / `asset_n` / `audio_n` / `video_n` / `cover_asset`；图片 URL 由卡片拼（§3.1） |
 | `journal_get` | `id` → `Journal`（全量 + tag 对象） | |
 | `journal_save` | `id? content format title mood weather tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`weather` 只接受 17 个固定 code 或 null，其余返回 `bad_weather`。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`audio_n`/`video_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空内容的新建由前端拦截（§5） |
 | `journal_delete` | `id` → `day_key` | 软删；同事务更新 `day_mark` |
@@ -287,7 +287,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 **文案**：`i18n/messages/en.ts` 是键的唯一真相（扁平 key + `{n}` 占位），`zh-CN.ts` 用 `satisfies typeof en` 声明，缺键直接编译失败；`t()` 加 `Intl.PluralRules` 约 100 行。语言切换改根节点一个 `locale` ref，文案由计算属性重算，视图树保持挂载。
 
-**时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `day_key` 三个原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。修仙模式的 24+ 时刻也在前端算：本地墙钟早于分界点时，日期取前一天、小时 +24（`displayParts`），再交给格式串与 `Intl`。
+**时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `updated_at` / `day_key` 原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。修仙模式的 24+ 时刻也在前端算：本地墙钟早于分界点时，日期取前一天、小时 +24（`displayParts`），再交给格式串与 `Intl`。卡片显示哪个时间由设置 `cardTime` 决定（`recorded` 默认 / `updated`）：`updated` 用该时刻的本地 offset 与同一个分界点格式化；排序、游标与 `day_key` 始终基于 `recorded_at`。
 
 **断点**：`useBreakpoint` 用三组 `matchMedia` 订阅 `<600 / ≥960 / ≥1200`，**只在布尔翻转时发布**，组件按 `isNarrow`、`isWide`、`isThreePane` 切换。960 先出两栏（184 侧轨 + 日历 300 + 列表），1200 才出三栏（240 + 300 + 420）；理由见 [UI.md §2](./UI.md)。
 

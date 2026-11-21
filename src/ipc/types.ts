@@ -1,6 +1,7 @@
 export type Theme = "system" | "light" | "dark";
 export type DateFormat = "slash" | "short" | "zh";
 export type LocaleCode = "zh-CN" | "en";
+export type CardTime = "recorded" | "updated";
 
 export interface Settings {
   theme: Theme;
@@ -14,6 +15,7 @@ export interface Settings {
   lockLeaveDelayS: number;
   reduceMotion: boolean;
   dayBoundaryMinutes: number;
+  cardTime: CardTime;
 }
 
 export interface Tag {
@@ -31,6 +33,7 @@ export interface JournalSummary {
   recorded_at: string;
   recorded_off: number;
   day_key: string;
+  updated_at: string;
   words: number;
   asset_n: number;
   audio_n: number;

@@ -38,7 +38,7 @@ export function weekDays(dayKey: string, weekStart: number): string[] {
   return Array.from({ length: 7 }, (_, index) => addDays(start, index));
 }
 
-export function localOffsetMinutes(now = new Date()): number {
+function localOffsetMinutes(now = new Date()): number {
   return -now.getTimezoneOffset();
 }
 
@@ -108,13 +108,28 @@ export function formatRecordedAt(
   return `${value.year}/${pad(value.month)}/${pad(value.day)} ${weekdayLabel(value.weekday)}`;
 }
 
-export function formatCardDate(
+function formatCardDate(
   recordedAt: string,
   offsetMinutes: number,
   boundaryMinutes = 0,
 ): string {
   const value = displayParts(recordedAt, offsetMinutes, boundaryMinutes);
   return `${pad(value.month)}/${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}`;
+}
+
+export function formatCardTime(
+  recordedAt: string,
+  recordedOff: number,
+  updatedAt: string,
+  showUpdated: boolean,
+  boundaryMinutes = 0,
+): string {
+  if (!showUpdated) return formatCardDate(recordedAt, recordedOff, boundaryMinutes);
+  return formatCardDate(
+    updatedAt,
+    localOffsetMinutes(new Date(updatedAt)),
+    boundaryMinutes,
+  );
 }
 
 export function formatBoundary(minutes: number): string {

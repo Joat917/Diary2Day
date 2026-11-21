@@ -39,7 +39,7 @@ import { useSession } from "../stores/session";
 import {
   formatBoundary,
   formatBytes,
-  formatCardDate,
+  formatCardTime,
   parseBoundary,
 } from "../utils/date";
 import CodeDialog from "../components/CodeDialog.vue";
@@ -104,6 +104,12 @@ async function setDateFormat(value: string) {
   if (value === "slash" || value === "short" || value === "zh") {
     await session.patch({ dateFormat: value });
   }
+}
+
+async function toggleCardTime() {
+  await session.patch({
+    cardTime: session.settings.cardTime === "updated" ? "recorded" : "updated",
+  });
 }
 
 async function toggleIndent() {
@@ -466,6 +472,19 @@ onBeforeUnmount(() => {
               <Icon class="select-chevron" :path="mdiChevronDown" :size="16" />
             </span>
           </div>
+          <div class="row">
+            <span class="label">{{ t("me.cardTime") }}</span>
+            <button
+              class="switch"
+              type="button"
+              role="switch"
+              :aria-checked="session.settings.cardTime === 'updated'"
+              :class="{ on: session.settings.cardTime === 'updated' }"
+              @click="toggleCardTime"
+            >
+              <span class="knob" />
+            </button>
+          </div>
         </div>
       </section>
 
@@ -582,7 +601,6 @@ onBeforeUnmount(() => {
           >
             <span class="action-main">
               <span class="label">{{ t("me.export") }}</span>
-              <span class="sub">{{ t("me.exportHint") }}</span>
             </span>
             <Icon :path="mdiFileExportOutline" :size="20" />
           </button>
@@ -668,9 +686,11 @@ onBeforeUnmount(() => {
               <p class="trash-title">{{ item.title || t("common.untitled") }}</p>
               <p class="trash-meta">
                 {{
-                  formatCardDate(
+                  formatCardTime(
                     item.recorded_at,
                     item.recorded_off,
+                    item.updated_at,
+                    session.settings.cardTime === "updated",
                     session.settings.dayBoundaryMinutes,
                   )
                 }}
