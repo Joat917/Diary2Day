@@ -1,0 +1,657 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
+import Vditor from "vditor";
+import {
+  mdiArrowLeft,
+  mdiCheck,
+  mdiPencil,
+  mdiPin,
+  mdiPinOutline,
+  mdiTrashCanOutline,
+} from "@mdi/js";
+import {
+  IpcError,
+  journalDelete,
+  journalGet,
+  journalSetPinned,
+  journalSave,
+} from "../ipc/client";
+import type { Journal, Tag } from "../ipc/types";
+import { t } from "../i18n";
+import { useBreakpoint } from "../composables/useBreakpoint";
+import { useAutosave } from "../composables/useAutosave";
+import { useSession } from "../stores/session";
+import { formatRecordedAt } from "../utils/date";
+import EditorPane from "../components/EditorPane.vue";
+import Icon from "../components/Icon.vue";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
+import MetaChips from "../components/MetaChips.vue";
+import StateBlock from "../components/StateBlock.vue";
+
+const route = useRoute();
+const router = useRouter();
+const session = useSession();
+const { isNarrow, isWide } = useBreakpoint();
+
+const journal = ref<Journal | null>(null);
+const content = ref("");
+const loading = ref(true);
+const missing = ref(false);
+const failed = ref(false);
+const editing = ref(false);
+const previewEl = ref<HTMLElement | null>(null);
+const editorPane = ref<InstanceType<typeof EditorPane> | null>(null);
+
+const entryId = computed(() => String(route.params.id ?? ""));
+const metaSaving = ref(false);
+const deleteOpen = ref(false);
+const pendingFocus = ref(false);
+
+async function persist(value: string) {
+  const item = journal.value;
+  if (!item) return;
+  const saved = await journalSave({
+    id: item.id,
+    content: value,
+    format: item.format,
+    mood: item.mood,
+    tagIds: item.tags.map((tag) => tag.id),
+    recordedAt: item.recorded_at,
+    recordedOff: item.recorded_off,
+    pinned: item.pinned,
+    sensitive: item.sensitive,
+    revision: item.revision,
+  });
+  journal.value = saved;
+}
+
+const {
+  state: saveState,
+  schedule: scheduleSave,
+  flushQuiet: flushSave,
+} = useAutosave(() => content.value, persist);
+
+async function updateTags(tags: Tag[]) {
+  const item = journal.value;
+  if (!item) return;
+  item.tags = tags;
+  await saveMeta();
+}
+
+async function updateMood(code: string | null) {
+  const item = journal.value;
+  if (!item) return;
+  item.mood = code;
+  await saveMeta();
+}
+
+let metaQueued = false;
+
+async function saveMeta() {
+  if (metaSaving.value) {
+    metaQueued = true;
+    return;
+  }
+  metaSaving.value = true;
+  try {
+    do {
+      metaQueued = false;
+      await flushSave();
+      await persist(content.value);
+    } while (metaQueued);
+  } catch {
+    saveState.value = "error";
+  } finally {
+    metaSaving.value = false;
+  }
+}
+
+const dateText = computed(() => {
+  const item = journal.value;
+  if (!item) return "";
+  return formatRecordedAt(
+    item.recorded_at,
+    item.recorded_off,
+    session.settings.dateFormat,
+  );
+});
+
+function isDark(): boolean {
+  return document.documentElement.dataset.theme === "dark";
+}
+
+function renderPreview() {
+  const element = previewEl.value;
+  if (!element) return;
+  element.innerHTML = "";
+  if (!content.value.trim()) return;
+  const dark = isDark();
+  element.classList.add("vditor-reset");
+  Vditor.preview(element as HTMLDivElement, content.value, {
+    cdn: "/vditor",
+    mode: dark ? "dark" : "light",
+    theme: { current: dark ? "dark" : "light", path: "/vditor/dist/css/content-theme" },
+    hljs: { style: dark ? "native" : "github", lineNumber: false },
+    anchor: 0,
+    ...(session.settings.imageLazy ? { lazyLoadImage: "lazy" } : {}),
+  });
+  requestAnimationFrame(highlightQuery);
+}
+
+function queryText(): string {
+  const value = route.query.q;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function highlightQuery() {
+  const rootEl = previewEl.value;
+  const needle = queryText();
+  if (!rootEl || !needle) return;
+  const target = needle.toLowerCase();
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue?.trim()) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (parent.closest("pre, code, script, style, mark")) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+
+  let first: HTMLElement | null = null;
+  let total = 0;
+  for (const node of nodes) {
+    if (total >= 200) break;
+    const value = node.nodeValue ?? "";
+    const lower = value.toLowerCase();
+    if (!lower.includes(target)) continue;
+    const fragment = document.createDocumentFragment();
+    let start = 0;
+    let index = lower.indexOf(target);
+    while (index !== -1 && total < 200) {
+      if (index > start) fragment.append(value.slice(start, index));
+      const mark = document.createElement("mark");
+      mark.className = total === 0 ? "dd-hit current" : "dd-hit";
+      mark.textContent = value.slice(index, index + target.length);
+      fragment.append(mark);
+      first ??= mark;
+      total += 1;
+      start = index + target.length;
+      index = lower.indexOf(target, start);
+    }
+    if (start < value.length) fragment.append(value.slice(start));
+    node.parentNode?.replaceChild(fragment, node);
+  }
+  if (first) {
+    requestAnimationFrame(() => {
+      first?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+}
+
+async function load() {
+  const id = entryId.value;
+  if (!id) return;
+  loading.value = true;
+  missing.value = false;
+  failed.value = false;
+  try {
+    const item = await journalGet(id);
+    journal.value = item;
+    content.value = item.content;
+    editing.value = route.query.edit === "1" || (!isNarrow.value && !queryText());
+    await nextTick();
+    if (editing.value) {
+      pendingFocus.value = true;
+      editorPane.value?.focus();
+    } else {
+      renderPreview();
+    }
+  } catch (error) {
+    if (error instanceof IpcError && error.code === "journal_not_found") {
+      missing.value = true;
+    } else {
+      failed.value = true;
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
+function onEditorReady() {
+  if (!pendingFocus.value) return;
+  pendingFocus.value = false;
+  editorPane.value?.focus();
+}
+
+watch(
+  entryId,
+  async (next, previous) => {
+    if (!next) return;
+    if (previous) await flushSave();
+    content.value = "";
+    await load();
+  },
+  { immediate: true },
+);
+
+function onEditorInput(value: string) {
+  content.value = value;
+  scheduleSave();
+}
+
+async function startEdit() {
+  if (editing.value || !journal.value) return;
+  editing.value = true;
+  await nextTick();
+  editorPane.value?.focus();
+}
+
+async function finishEdit() {
+  await flushSave();
+  editing.value = false;
+  await nextTick();
+  renderPreview();
+}
+
+async function togglePin() {
+  const item = journal.value;
+  if (!item) return;
+  const next = !item.pinned;
+  await journalSetPinned(item.id, next);
+  item.pinned = next;
+}
+
+function remove() {
+  if (!journal.value) return;
+  deleteOpen.value = true;
+}
+
+async function confirmRemove() {
+  deleteOpen.value = false;
+  const item = journal.value;
+  if (!item) return;
+  await flushSave();
+  try {
+    await journalDelete(item.id);
+    goBack();
+  } catch {
+    failed.value = true;
+  }
+}
+
+function goBack() {
+  if (window.history.state?.back) router.back();
+  else void router.push("/today");
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (deleteOpen.value) return;
+  const target = event.target as HTMLElement | null;
+  const typing =
+    target?.tagName === "INPUT" ||
+    target?.tagName === "TEXTAREA" ||
+    target?.isContentEditable;
+  if (typing) return;
+  if (event.key === "e" || event.key === "E") {
+    void startEdit();
+  } else if (event.key === "Escape" && editing.value && isNarrow.value) {
+    void finishEdit();
+  }
+}
+
+function onWindowBlur() {
+  void flushSave();
+}
+
+function onVisibility() {
+  if (document.visibilityState === "hidden") void flushSave();
+}
+
+function onBeforeUnload() {
+  void flushSave();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  window.addEventListener("blur", onWindowBlur);
+  window.addEventListener("beforeunload", onBeforeUnload);
+  document.addEventListener("visibilitychange", onVisibility);
+});
+
+onBeforeRouteLeave(async () => {
+  await flushSave();
+});
+
+onBeforeUnmount(() => {
+  void flushSave();
+  window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("blur", onWindowBlur);
+  window.removeEventListener("beforeunload", onBeforeUnload);
+  document.removeEventListener("visibilitychange", onVisibility);
+});
+
+watch(
+  () => session.settings.theme,
+  async () => {
+    if (!editing.value) {
+      await nextTick();
+      renderPreview();
+    }
+  },
+);
+
+watch(isNarrow, (narrow) => {
+  if (!narrow && !editing.value) void startEdit();
+});
+</script>
+
+<template>
+  <div class="view" :class="{ indent: session.settings.indentFirstLine }">
+    <header class="topbar">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="goBack">
+        <Icon :path="mdiArrowLeft" :size="22" />
+      </button>
+
+      <div class="heading">
+        <span class="date">{{ dateText }}</span>
+        <span v-if="journal" class="meta">
+          {{ t("detail.words", { n: journal.words }) }}
+          <template v-if="journal.pinned"> · {{ t("detail.pinned") }}</template>
+          <template v-if="saveState === 'saving'">
+            · {{ t("detail.saving") }}
+          </template>
+          <button
+            v-else-if="saveState === 'error'"
+            class="retry-save"
+            type="button"
+            @click="flushSave"
+          >
+            · {{ t("detail.saveError") }} · {{ t("detail.retrySave") }}
+          </button>
+        </span>
+      </div>
+
+      <div class="actions">
+        <button
+          v-if="journal && !editing && isWide"
+          class="icon-btn"
+          type="button"
+          :aria-label="t('common.edit')"
+          @click="startEdit"
+        >
+          <Icon :path="mdiPencil" :size="20" />
+        </button>
+        <button
+          v-if="journal"
+          class="icon-btn"
+          type="button"
+          :aria-label="journal.pinned ? t('detail.unpin') : t('detail.pin')"
+          :class="{ active: journal.pinned }"
+          @click="togglePin"
+        >
+          <Icon :path="journal.pinned ? mdiPin : mdiPinOutline" :size="20" />
+        </button>
+        <button
+          v-if="journal"
+          class="icon-btn danger"
+          type="button"
+          :aria-label="t('common.delete')"
+          @click="remove"
+        >
+          <Icon :path="mdiTrashCanOutline" :size="20" />
+        </button>
+        <button
+          v-if="journal && editing && isNarrow"
+          class="done"
+          type="button"
+          @click="finishEdit"
+        >
+          <Icon :path="mdiCheck" :size="16" />
+          {{ t("common.done") }}
+        </button>
+      </div>
+    </header>
+
+    <MetaChips
+      v-if="journal && !loading"
+      :tags="journal.tags"
+      :mood="journal.mood"
+      :editable="editing"
+      @update:tags="updateTags"
+      @update:mood="updateMood"
+    />
+
+    <div class="body">
+      <StateBlock v-if="loading" kind="loading" />
+      <StateBlock
+        v-else-if="missing"
+        kind="empty"
+        :title="t('detail.notFound')"
+        :action-label="t('common.back')"
+        @action="goBack"
+      />
+      <StateBlock
+        v-else-if="failed"
+        kind="error"
+        :title="t('common.error')"
+        :action-label="t('common.retry')"
+        @action="load"
+      />
+      <template v-else-if="journal">
+        <div v-if="editing" class="editor-wrap">
+          <EditorPane
+            ref="editorPane"
+            :model-value="content"
+            @update:model-value="onEditorInput"
+            @ready="onEditorReady"
+          />
+        </div>
+        <article
+          v-else
+          ref="previewEl"
+          class="preview"
+          @dblclick="startEdit"
+        />
+        <p v-if="!content.trim() && !editing" class="hint">
+          {{ t("detail.readHint") }}
+        </p>
+        <p v-if="editing && !content.trim()" class="hint warn">
+          {{ t("detail.emptyWarning") }}
+        </p>
+      </template>
+    </div>
+
+    <button
+      v-if="journal && !editing && isNarrow"
+      class="fab"
+      type="button"
+      @click="startEdit"
+    >
+      <Icon :path="mdiPencil" :size="18" />
+      {{ t("common.edit") }}
+    </button>
+
+    <ConfirmDialog
+      :open="deleteOpen"
+      :title="t('detail.deleteTitle')"
+      :message="t('detail.deleteConfirm')"
+      :confirm-label="t('common.delete')"
+      danger
+      @confirm="confirmRemove"
+      @cancel="deleteOpen = false"
+    />
+  </div>
+</template>
+
+<style scoped>
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--topbar-h);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-hairline);
+  background: var(--c-surface);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-pill);
+  color: var(--c-on-surface-muted);
+  flex: none;
+}
+
+.icon-btn.active {
+  color: var(--c-accent);
+}
+
+.icon-btn.danger {
+  color: var(--c-danger);
+}
+
+@media (hover: hover) {
+  .icon-btn:hover {
+    background: var(--c-surface-2);
+  }
+}
+
+.heading {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.date {
+  display: block;
+  font-size: var(--t-small);
+  line-height: var(--t-small-lh);
+  color: var(--c-on-surface);
+}
+
+.meta {
+  display: block;
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  color: var(--c-on-surface-muted);
+}
+
+.retry-save {
+  color: var(--c-danger);
+  font-size: var(--t-caption);
+  text-decoration: underline;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+}
+
+.done {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  height: 36px;
+  padding-inline: var(--s-3);
+  border-radius: var(--r-pill);
+  background: var(--c-primary);
+  color: var(--c-on-primary);
+  font-size: var(--t-small);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.editor-wrap {
+  height: 100%;
+  min-height: 0;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+}
+
+.preview {
+  width: min(calc(100% - var(--s-4) * 2), calc(var(--measure) + var(--s-5) * 2));
+  max-width: none;
+  margin: var(--s-3) auto var(--s-6);
+  padding: var(--s-5);
+  min-height: 200px;
+  background: var(--c-surface-1);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-md);
+}
+
+.preview :deep(.dd-hit) {
+  background: var(--c-hit);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.preview :deep(.dd-hit.current) {
+  background: var(--c-hit-current);
+}
+
+.hint {
+  padding: var(--s-4);
+  font-size: var(--t-small);
+  line-height: var(--t-small-lh);
+  color: var(--c-on-surface-muted);
+}
+
+.hint.warn {
+  color: var(--c-danger);
+  padding-top: 0;
+}
+
+.indent :deep(.preview p) {
+  text-indent: 2em;
+}
+
+.indent :deep(.vditor-reset p) {
+  text-indent: 2em;
+}
+
+.fab {
+  position: fixed;
+  inset-inline-end: var(--s-4);
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + var(--s-4));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  height: 44px;
+  padding-inline: var(--s-4);
+  border-radius: var(--r-pill);
+  background: var(--c-primary);
+  color: var(--c-on-primary);
+  box-shadow: var(--e-2);
+  font-size: var(--t-small);
+}
+
+@media (min-width: 960px) {
+  .fab {
+    bottom: var(--s-6);
+  }
+}
+
+.not-found {
+  padding: var(--s-6);
+}
+</style>

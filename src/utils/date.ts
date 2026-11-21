@@ -1,0 +1,134 @@
+import { locale, t, type MessageKey } from "../i18n";
+import type { DateFormat } from "../ipc/types";
+
+const pad = (value: number) => String(value).padStart(2, "0");
+
+export function todayKey(now = new Date()): string {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+export function parseDayKey(dayKey: string): { year: number; month: number; day: number } {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return { year, month, day };
+}
+
+export function addDays(dayKey: string, delta: number): string {
+  const { year, month, day } = parseDayKey(dayKey);
+  const date = new Date(Date.UTC(year, month - 1, day + delta));
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function weekdayOf(dayKey: string): number {
+  const { year, month, day } = parseDayKey(dayKey);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+export function startOfWeek(dayKey: string, weekStart: number): string {
+  const diff = (weekdayOf(dayKey) - weekStart + 7) % 7;
+  return addDays(dayKey, -diff);
+}
+
+export function weekDays(dayKey: string, weekStart: number): string[] {
+  const start = startOfWeek(dayKey, weekStart);
+  return Array.from({ length: 7 }, (_, index) => addDays(start, index));
+}
+
+export function localOffsetMinutes(now = new Date()): number {
+  return -now.getTimezoneOffset();
+}
+
+export function recordedAtForDay(dayKey: string, now = new Date()): {
+  recordedAt: string;
+  recordedOff: number;
+} {
+  const { year, month, day } = parseDayKey(dayKey);
+  const offset = localOffsetMinutes(now);
+  const wall = Date.UTC(
+    year,
+    month - 1,
+    day,
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+  );
+  return {
+    recordedAt: new Date(wall - offset * 60_000).toISOString(),
+    recordedOff: offset,
+  };
+}
+
+export function weekdayName(dayKey: string): string {
+  return t(`weekday.${weekdayOf(dayKey)}` as MessageKey);
+}
+
+function wallDate(recordedAt: string, offsetMinutes: number): Date {
+  const parsed = Date.parse(recordedAt);
+  return new Date((Number.isNaN(parsed) ? Date.now() : parsed) + offsetMinutes * 60_000);
+}
+
+function parts(date: Date) {
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+    weekday: date.getUTCDay(),
+  };
+}
+
+function weekdayLabel(weekday: number): string {
+  if (locale.value === "en") {
+    return new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "UTC" }).format(
+      new Date(Date.UTC(2024, 0, 7 + weekday)),
+    );
+  }
+  return `周${t(`weekday.${weekday}` as MessageKey)}`;
+}
+
+export function formatRecordedAt(
+  recordedAt: string,
+  offsetMinutes: number,
+  format: DateFormat,
+): string {
+  const value = parts(wallDate(recordedAt, offsetMinutes));
+  if (format === "short") {
+    return `${pad(value.month)}/${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}`;
+  }
+  if (format === "zh") {
+    return `${value.year}年${value.month}月${value.day}日`;
+  }
+  return `${value.year}/${pad(value.month)}/${pad(value.day)} ${weekdayLabel(value.weekday)}`;
+}
+
+export function formatCardDate(recordedAt: string, offsetMinutes: number): string {
+  const value = parts(wallDate(recordedAt, offsetMinutes));
+  return `${pad(value.month)}/${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}`;
+}
+
+export function formatDayTitle(dayKey: string): string {
+  const { year, month, day } = parseDayKey(dayKey);
+  return locale.value === "en"
+    ? `${year}/${pad(month)}/${pad(day)} ${weekdayLabel(weekdayOf(dayKey))}`
+    : `${year}年${month}月${day}日 ${weekdayLabel(weekdayOf(dayKey))}`;
+}
+
+export function monthLabel(dayKey: string): string {
+  const { year, month } = parseDayKey(dayKey);
+  return locale.value === "en" ? `${year}/${pad(month)}` : `${year}年${month}月`;
+}
+
+export function greetingKey(now = new Date()): MessageKey {
+  const hour = now.getHours();
+  if (hour >= 6 && hour < 11) return "greeting.morning";
+  if (hour >= 11 && hour < 13) return "greeting.noon";
+  if (hour >= 13 && hour < 18) return "greeting.afternoon";
+  if (hour >= 18 && hour < 23) return "greeting.evening";
+  return "greeting.night";
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}

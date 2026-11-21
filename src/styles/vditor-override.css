@@ -1,0 +1,242 @@
+.vditor {
+  --panel-background-color: var(--c-surface-1);
+  --panel-shadow: none;
+  --toolbar-background-color: var(--c-surface-2);
+  --toolbar-icon-color: var(--c-on-surface-muted);
+  --toolbar-icon-hover-color: var(--c-primary);
+  --textarea-background-color: var(--c-surface-1);
+  --textarea-text-color: var(--c-on-surface);
+  --border-color: var(--c-hairline);
+  --second-color: var(--c-on-surface-faint);
+  --heading-border-color: var(--c-hairline);
+  --blockquote-color: var(--c-on-surface-muted);
+  --ir-heading-color: var(--c-on-surface);
+  --ir-title-color: var(--c-on-surface-muted);
+  --ir-bi-color: var(--c-on-surface);
+  --ir-link-color: var(--c-primary);
+  --ir-bracket-color: var(--c-on-surface-muted);
+  --ir-paren-color: var(--c-on-surface-muted);
+  --count-background-color: transparent;
+
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  color: var(--c-on-surface);
+}
+
+.vditor-toolbar {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 var(--s-2);
+  margin: var(--s-2) var(--s-2) 0;
+  background: var(--c-surface-2);
+  border: none;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+}
+
+.vditor-toolbar__item {
+  height: 28px;
+  min-width: 28px;
+}
+
+.vditor-toolbar__item svg {
+  width: 20px;
+  height: 20px;
+  color: var(--c-on-surface-muted);
+}
+
+.vditor-toolbar__item--current svg,
+.vditor-toolbar__item:hover svg {
+  color: var(--c-primary);
+}
+
+.vditor-toolbar__divider {
+  height: 16px;
+  margin-inline: var(--s-1);
+  background-color: var(--c-hairline);
+}
+
+.vditor-content {
+  background: var(--c-surface-1);
+}
+
+.vditor-reset {
+  font-family: var(--font-body);
+  font-size: var(--t-body);
+  line-height: var(--t-body-lh);
+  color: var(--c-on-surface);
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding: 0;
+  caret-color: var(--c-primary);
+}
+
+.vditor-ir .vditor-reset {
+  padding-inline: 2px;
+}
+
+.vditor-reset p {
+  margin: var(--s-4) 0;
+}
+
+.vditor-reset h1,
+.vditor-reset h2,
+.vditor-reset h3,
+.vditor-reset h4,
+.vditor-reset h5,
+.vditor-reset h6 {
+  font-weight: 500;
+  color: var(--c-on-surface);
+  margin-top: var(--s-6);
+  margin-bottom: var(--s-2);
+  border: none;
+}
+
+.vditor-reset h1,
+.vditor-reset h2 {
+  font-size: var(--t-title);
+  line-height: var(--t-title-lh);
+}
+
+.vditor-reset h3,
+.vditor-reset h4,
+.vditor-reset h5,
+.vditor-reset h6 {
+  font-size: var(--t-body);
+  line-height: var(--t-body-lh);
+}
+
+.vditor-reset a {
+  color: var(--c-primary);
+}
+
+.vditor-reset hr {
+  border: none;
+  border-top: 1px solid var(--c-hairline);
+  margin: var(--s-6) 0;
+}
+
+.vditor-ir__marker {
+  color: var(--c-on-surface-faint);
+}
+
+.vditor-ir__node--expand .vditor-ir__marker {
+  color: var(--c-on-surface-muted);
+}
+
+.vditor-reset pre {
+  background: var(--c-surface-2);
+  border-radius: var(--r-sm);
+  padding: var(--s-3);
+  overflow-x: auto;
+}
+
+.vditor-reset pre > code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  background: transparent;
+  padding: 0;
+}
+
+.vditor-reset code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--c-surface-2);
+  border-radius: var(--r-sm);
+  padding: 1px 4px;
+}
+
+.vditor-reset blockquote {
+  border-inline-start: 3px solid var(--c-hairline);
+  color: var(--c-on-surface-muted);
+  padding-inline-start: var(--s-3);
+  margin-inline: 0;
+}
+
+.vditor-reset img {
+  max-width: 100%;
+  border-radius: var(--r-md);
+}
+
+.vditor-reset table {
+  border-collapse: collapse;
+}
+
+.vditor-reset td,
+.vditor-reset th {
+  border: 1px solid var(--c-hairline);
+  padding: var(--s-1) var(--s-2);
+}
+
+.vditor-reset input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--c-primary);
+}
+
+.vditor-outline {
+  display: none;
+}
+
+.vditor-preview {
+  background: transparent;
+}
+
+.vditor-preview__action {
+  display: none;
+}
+
+/* Read-mode preview loads its content theme at runtime, after this file.
+   Prefix with body so these rules keep winning the cascade. */
+body .vditor-reset {
+  color: var(--c-on-surface);
+  background: transparent;
+  font-family: var(--font-body);
+}
+
+body .vditor-reset h1,
+body .vditor-reset h2 {
+  border-bottom: none;
+}
+
+body .vditor-reset a {
+  color: var(--c-primary);
+}
+
+body .vditor-reset hr {
+  height: 0;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--c-hairline);
+}
+
+body .vditor-reset blockquote {
+  color: var(--c-on-surface-muted);
+  border: none;
+  border-inline-start: 3px solid var(--c-hairline);
+  padding-inline-start: var(--s-3);
+}
+
+body .vditor-reset table td,
+body .vditor-reset table th {
+  border: 1px solid var(--c-hairline);
+}
+
+body .vditor-reset pre {
+  background: var(--c-surface-2);
+}
+
+body .vditor-reset code:not(pre code) {
+  background: var(--c-surface-2);
+}
+
+@media (max-width: 599px) {
+  .vditor-toolbar {
+    margin-inline: 0;
+    border-radius: 0;
+  }
+}
