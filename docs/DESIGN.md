@@ -351,6 +351,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 3. 窗口配置：移动端安全区、桌面最小尺寸；现有 800×600 固定尺寸在手机上会退化。
 4. `clippy.toml`：`unwrap_used`/`expect_used` 设为 `deny`，对应 §4 的 `panic = "abort"` 约束。
 5. `tauri-plugin-dialog`（另存为/打开目录）要动三处：`Cargo.toml`、`tauri.conf.json`、`capabilities`。
+6. 应用图标：`public/app-icon.svg` 是唯一矢量源，`index.html` 以它作为 favicon；修改后运行 `npx tauri icon public/app-icon.svg` 重新生成桌面与移动端图标，不直接编辑 `src-tauri/icons/` 和 `src-tauri/gen/` 里的位图。
 
 ---
 
