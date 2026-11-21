@@ -1,20 +1,29 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { mdiCheck, mdiClose, mdiImagePlus, mdiSend } from "@mdi/js";
 import { assetGc, describeError, journalSave } from "../ipc/client";
 import type { Asset, Journal } from "../ipc/types";
 import { t } from "../i18n";
+import type { MessageKey } from "../i18n";
 import { assetFileUrl, assetMarkdown, referencedAssetNames, thumbUrl } from "../utils/assetUrl";
 import { recordedAtNow } from "../utils/date";
-import { importMediaFiles, insertLabelKey, isMediaFile } from "../utils/media";
+import { registerFileDrop } from "../utils/fileDrop";
+import {
+  importMediaPaths,
+  insertLabelKey,
+  isMediaFile,
+  mediaKindOfPath,
+  pasteMedia,
+  pickMedia,
+} from "../utils/media";
 import Icon from "./Icon.vue";
 
 const emit = defineEmits<{ saved: [journal: Journal] }>();
 
 const text = ref("");
 const attachments = ref<Asset[]>([]);
+const root = ref<HTMLElement | null>(null);
 const textarea = ref<HTMLTextAreaElement | null>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
 const status = ref<"idle" | "saving" | "saved" | "error">("idle");
 const dragging = ref(false);
 const importing = ref(false);
@@ -48,16 +57,14 @@ function resize() {
   element.style.height = `${Math.min(Math.max(element.scrollHeight, line), line * 6)}px`;
 }
 
-async function ingest(files: File[]) {
+async function ingest(load: () => Promise<Asset[]>, labelKey: MessageKey) {
   if (importing.value) return;
-  const media = files.filter(isMediaFile);
-  if (!media.length) return;
   importing.value = true;
   importError.value = null;
-  importLabel.value = t(insertLabelKey(media));
+  importLabel.value = t(labelKey);
   try {
-    const assets = await importMediaFiles(media);
-    attachments.value = [...attachments.value, ...assets];
+    const assets = await load();
+    if (assets.length) attachments.value = [...attachments.value, ...assets];
   } catch (err) {
     importError.value = describeError(err);
   } finally {
@@ -66,33 +73,41 @@ async function ingest(files: File[]) {
   }
 }
 
-function onPick(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  input.value = "";
-  if (files.length) void ingest(files);
+function pick() {
+  void ingest(pickMedia, "editor.insertingMedia");
 }
 
 function onPaste(event: ClipboardEvent) {
   const files = Array.from(event.clipboardData?.files ?? []);
   if (!files.some(isMediaFile)) return;
   event.preventDefault();
-  void ingest(files);
+  void ingest(pasteMedia, "editor.insertingMedia");
 }
 
-function onDragOver(event: DragEvent) {
-  if (!event.dataTransfer?.types.includes("Files")) return;
-  event.preventDefault();
-  dragging.value = true;
+function onDragEnter(paths: string[]) {
+  if (paths.some((path) => mediaKindOfPath(path))) dragging.value = true;
 }
 
-function onDrop(event: DragEvent) {
-  const files = Array.from(event.dataTransfer?.files ?? []);
+function onDrop(paths: string[]) {
   dragging.value = false;
-  if (!files.some(isMediaFile)) return;
-  event.preventDefault();
-  void ingest(files);
+  const media = paths.filter((path) => mediaKindOfPath(path));
+  if (!media.length) return;
+  const kinds = media.map((path) => mediaKindOfPath(path)!);
+  void ingest(() => importMediaPaths(media), insertLabelKey(kinds));
 }
+
+let unregisterDrop: (() => void) | null = null;
+
+onMounted(() => {
+  if (!root.value) return;
+  unregisterDrop = registerFileDrop(root.value, {
+    enter: onDragEnter,
+    leave: () => {
+      dragging.value = false;
+    },
+    drop: onDrop,
+  });
+});
 
 function removeAttachment(name: string) {
   attachments.value = attachments.value.filter((asset) => asset.name !== name);
@@ -147,6 +162,8 @@ async function runSave() {
 }
 
 onBeforeUnmount(() => {
+  unregisterDrop?.();
+  unregisterDrop = null;
   window.clearTimeout(resetTimer);
   const pending = saveTask;
   void (async () => {
@@ -163,13 +180,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section
-    class="card"
-    :class="{ dragging }"
-    @dragover="onDragOver"
-    @dragleave.self="dragging = false"
-    @drop="onDrop"
-  >
+  <section ref="root" class="card" :class="{ dragging }">
     <textarea
       ref="textarea"
       v-model="text"
@@ -211,7 +222,7 @@ onBeforeUnmount(() => {
           :aria-label="t('editor.image')"
           :disabled="importing"
           @mousedown.prevent
-          @click="fileInput?.click()"
+          @click="pick"
         >
           <Icon :path="mdiImagePlus" :size="16" />
         </button>
@@ -250,14 +261,6 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <input
-      ref="fileInput"
-      class="file-input"
-      type="file"
-      accept="image/*,audio/*,video/*"
-      multiple
-      @change="onPick"
-    />
     <div v-if="dragging" class="drop-hint">{{ t("editor.dropHint") }}</div>
   </section>
 </template>
@@ -405,10 +408,6 @@ onBeforeUnmount(() => {
   font-size: var(--t-small);
   min-height: 32px;
   flex: none;
-}
-
-.file-input {
-  display: none;
 }
 
 .drop-hint {

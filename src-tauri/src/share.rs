@@ -60,8 +60,8 @@ fn take_file(state: &AppState, root: &Path, file: &ShareFile) -> Option<AssetDto
     if !canonical.starts_with(root) || !canonical.is_file() {
         return None;
     }
-    let bytes = fs::read(&canonical).ok()?;
-    assets::import_bytes(state, &display_name(file, &canonical), &bytes).ok()
+    let mut input = fs::File::open(&canonical).ok()?;
+    assets::import_reader(state, &display_name(file, &canonical), &mut input).ok()
 }
 
 fn asset_markdown(asset: &AssetDto) -> String {

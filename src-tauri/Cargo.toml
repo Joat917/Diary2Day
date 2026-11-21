@@ -40,6 +40,9 @@ walkdir = "2"
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = "=30.2.0"
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3", features = ["image-data"] }
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1

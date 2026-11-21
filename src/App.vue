@@ -125,7 +125,7 @@ const activeIndex = computed(() =>
           <span>{{ t(item.label) }}</span>
         </RouterLink>
       </nav>
-      <div class="rail-foot">M2 · {{ appVersion }}</div>
+      <div class="rail-foot">{{ appVersion }}</div>
     </aside>
 
     <main class="content" :class="{ broad }">

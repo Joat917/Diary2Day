@@ -8,7 +8,6 @@ import type {
   DataInfo,
   DayMark,
   ExportReport,
-  ImportFile,
   ImportReport,
   Journal,
   JournalPage,
@@ -179,8 +178,16 @@ export function searchQuery(
   });
 }
 
-export function mediaImport(files: ImportFile[]): Promise<Asset[]> {
-  return call("media_import", { files });
+export function mediaPickImport(): Promise<Asset[]> {
+  return call("media_pick_import");
+}
+
+export function mediaPasteImport(): Promise<Asset[]> {
+  return call("media_paste_import");
+}
+
+export function mediaImportPaths(paths: string[]): Promise<Asset[]> {
+  return call("media_import_paths", { paths });
 }
 
 export function assetGc(names: string[]): Promise<number> {

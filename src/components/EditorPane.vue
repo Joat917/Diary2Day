@@ -4,12 +4,22 @@ import Vditor from "vditor";
 import { mdiImagePlus } from "@mdi/js";
 import { describeError } from "../ipc/client";
 import { t } from "../i18n";
+import type { MessageKey } from "../i18n";
+import type { Asset } from "../ipc/types";
 import {
   assetMarkdown,
   collapseAssetUrls,
   expandAssetUrls,
 } from "../utils/assetUrl";
-import { importMediaFiles, insertLabelKey, isMediaFile } from "../utils/media";
+import { registerFileDrop } from "../utils/fileDrop";
+import {
+  importMediaPaths,
+  insertLabelKey,
+  isMediaFile,
+  mediaKindOfPath,
+  pasteMedia,
+  pickMedia,
+} from "../utils/media";
 
 const props = defineProps<{ modelValue: string }>();
 const emit = defineEmits<{
@@ -18,8 +28,8 @@ const emit = defineEmits<{
   "assets-imported": [names: string[]];
 }>();
 
+const root = ref<HTMLDivElement | null>(null);
 const host = ref<HTMLDivElement | null>(null);
-const fileInput = ref<HTMLInputElement | null>(null);
 const dragging = ref(false);
 const busy = ref(false);
 const insertLabel = ref("");
@@ -53,15 +63,14 @@ function patchToolbar(element: HTMLElement) {
   };
 }
 
-async function ingest(files: File[]) {
+async function ingest(load: () => Promise<Asset[]>, labelKey: MessageKey) {
   if (busy.value) return;
-  const media = files.filter(isMediaFile);
-  if (!media.length) return;
   busy.value = true;
   insertError.value = null;
-  insertLabel.value = t(insertLabelKey(media));
+  insertLabel.value = t(labelKey);
   try {
-    const assets = await importMediaFiles(media);
+    const assets = await load();
+    if (!assets.length) return;
     emit(
       "assets-imported",
       assets.map((asset) => asset.name),
@@ -79,11 +88,8 @@ async function ingest(files: File[]) {
   }
 }
 
-function onPick(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  input.value = "";
-  if (files.length) void ingest(files);
+function pickImage() {
+  void ingest(pickMedia, "editor.insertingMedia");
 }
 
 function onPaste(event: ClipboardEvent) {
@@ -91,45 +97,33 @@ function onPaste(event: ClipboardEvent) {
   if (!files.some(isMediaFile)) return;
   event.preventDefault();
   event.stopPropagation();
-  void ingest(files);
+  void ingest(pasteMedia, "editor.insertingMedia");
 }
 
-function onDragOver(event: DragEvent) {
-  if (!event.dataTransfer?.types.includes("Files")) return;
-  event.preventDefault();
-  dragging.value = true;
+function onDragEnter(paths: string[]) {
+  if (paths.some((path) => mediaKindOfPath(path))) dragging.value = true;
 }
 
-function onDragLeave(event: DragEvent) {
-  if (!host.value?.contains(event.relatedTarget as Node | null)) dragging.value = false;
-}
-
-function onDrop(event: DragEvent) {
-  const files = Array.from(event.dataTransfer?.files ?? []);
+function onDrop(paths: string[]) {
   dragging.value = false;
-  if (!files.some(isMediaFile)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  void ingest(files);
+  const media = paths.filter((path) => mediaKindOfPath(path));
+  if (!media.length) return;
+  const kinds = media.map((path) => mediaKindOfPath(path)!);
+  void ingest(() => importMediaPaths(media), insertLabelKey(kinds));
 }
 
-function bindHost(element: HTMLElement) {
-  element.addEventListener("paste", onPaste, true);
-  element.addEventListener("dragover", onDragOver);
-  element.addEventListener("dragleave", onDragLeave);
-  element.addEventListener("drop", onDrop);
-}
-
-function unbindHost(element: HTMLElement) {
-  element.removeEventListener("paste", onPaste, true);
-  element.removeEventListener("dragover", onDragOver);
-  element.removeEventListener("dragleave", onDragLeave);
-  element.removeEventListener("drop", onDrop);
-}
+let unregisterDrop: (() => void) | null = null;
 
 onMounted(() => {
-  if (!host.value) return;
-  bindHost(host.value);
+  if (!root.value || !host.value) return;
+  root.value.addEventListener("paste", onPaste, true);
+  unregisterDrop = registerFileDrop(root.value, {
+    enter: onDragEnter,
+    leave: () => {
+      dragging.value = false;
+    },
+    drop: onDrop,
+  });
   editor = new Vditor(host.value, {
     mode: "ir",
     cdn: "/vditor",
@@ -144,7 +138,7 @@ onMounted(() => {
         icon: `<svg viewBox="0 0 24 24"><path fill="currentColor" d="${mdiImagePlus}"/></svg>`,
         tip: t("editor.image"),
         tipPosition: "s",
-        click: () => fileInput.value?.click(),
+        click: pickImage,
       },
       "headings",
       "bold",
@@ -179,7 +173,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  if (host.value) unbindHost(host.value);
+  root.value?.removeEventListener("paste", onPaste, true);
+  unregisterDrop?.();
+  unregisterDrop = null;
   editor?.destroy();
   editor = null;
 });
@@ -190,17 +186,9 @@ defineExpose({
 </script>
 
 <template>
-  <div class="editor" :class="{ dragging }">
+  <div ref="root" class="editor" :class="{ dragging }">
     <!-- Vditor clears its host element on init, so it gets a dedicated child. -->
     <div ref="host" class="editor-body" />
-    <input
-      ref="fileInput"
-      class="file-input"
-      type="file"
-      accept="image/*,audio/*,video/*"
-      multiple
-      @change="onPick"
-    />
     <div v-if="dragging" class="drop-hint">{{ t("editor.dropHint") }}</div>
     <div v-if="busy" class="insert-hint" role="status" aria-live="polite">
       <span class="spinner" aria-hidden="true" />
@@ -238,10 +226,6 @@ defineExpose({
 .editor-body {
   flex: 1;
   min-height: 0;
-}
-
-.file-input {
-  display: none;
 }
 
 .drop-hint {

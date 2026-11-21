@@ -16,8 +16,6 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
-private const val MAX_SHARE_BYTES = 64L * 1024 * 1024
-
 class MainActivity : TauriActivity() {
   private val shareQueue = Executors.newSingleThreadExecutor()
   @Volatile private var insetTopDp = 0f
@@ -162,12 +160,9 @@ class MainActivity : TauriActivity() {
       input.use {
         target.outputStream().use { output ->
           val buffer = ByteArray(64 * 1024)
-          var total = 0L
           while (true) {
             val read = it.read(buffer)
             if (read < 0) break
-            total += read
-            if (total > MAX_SHARE_BYTES) throw java.io.IOException("share too large")
             output.write(buffer, 0, read)
           }
         }

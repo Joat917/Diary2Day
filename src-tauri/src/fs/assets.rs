@@ -1,21 +1,20 @@
-use base64::Engine;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportFile {
-    pub orig_name: String,
-    pub data: String,
-}
+const READ_BUFFER: usize = 64 * 1024;
+
+pub const MEDIA_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "mp3", "wav", "ogg", "m4a", "aac", "flac",
+    "mp4", "webm", "mov", "mkv",
+];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,16 +64,10 @@ fn ext_of(name: &str) -> Option<String> {
     valid.then_some(ext)
 }
 
-fn decode_payload(data: &str) -> Result<Vec<u8>, AppError> {
-    let raw = data
-        .split_once("base64,")
-        .map(|(_, value)| value)
-        .unwrap_or(data);
-    base64::engine::general_purpose::STANDARD
-        .decode(raw.trim())
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(raw.trim()))
-        .map_err(|err| AppError::new("bad_asset", "图片数据无法读取").with_detail(err.to_string()))
+pub fn is_media_name(name: &str) -> bool {
+    ext_of(name).as_deref().and_then(kind_for).is_some()
 }
+
 
 fn write_thumbnail(assets_dir: &Path, name: &str, path: &Path) {
     let stem = name.rsplit_once('.').map(|(value, _)| value).unwrap_or(name);
@@ -96,20 +89,19 @@ fn write_thumbnail(assets_dir: &Path, name: &str, path: &Path) {
     let _ = thumb.save_with_format(thumbs.join(format!("{stem}.jpg")), image::ImageFormat::Jpeg);
 }
 
-pub fn import_bytes(
+pub fn import_reader(
     state: &AppState,
     orig_name: &str,
-    bytes: &[u8],
+    reader: &mut impl Read,
 ) -> Result<AssetDto, AppError> {
-    if bytes.is_empty() {
+    let mut buffer = vec![0u8; READ_BUFFER];
+    let read = reader.read(&mut buffer)?;
+    if read == 0 {
         return Err(AppError::new("bad_asset", "附件内容为空"));
-    }
-    if bytes.len() > 64 * 1024 * 1024 {
-        return Err(AppError::new("asset_too_large", "单个附件不能超过 64MB"));
     }
     let ext = ext_of(orig_name)
         .filter(|ext| kind_for(ext).is_some())
-        .or_else(|| sniff_ext(bytes).map(str::to_string))
+        .or_else(|| sniff_ext(&buffer[..read]).map(str::to_string))
         .ok_or_else(|| AppError::new("bad_asset", "无法识别文件类型"))?;
     let kind = kind_for(&ext)
         .ok_or_else(|| AppError::new("bad_asset", "不支持的文件类型"))?
@@ -120,9 +112,28 @@ pub fn import_bytes(
     let path: PathBuf = state.paths.assets_dir.join(&name);
 
     let mut handle = fs::File::create(&path)?;
-    handle.write_all(bytes)?;
-    handle.flush()?;
+    let mut hasher = Sha256::new();
+    let mut size: u64 = 0;
+    let written = (|| -> std::io::Result<()> {
+        handle.write_all(&buffer[..read])?;
+        hasher.update(&buffer[..read]);
+        size += read as u64;
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            handle.write_all(&buffer[..read])?;
+            hasher.update(&buffer[..read]);
+            size += read as u64;
+        }
+        handle.flush()
+    })();
     drop(handle);
+    if let Err(err) = written {
+        let _ = fs::remove_file(&path);
+        return Err(err.into());
+    }
 
     let (width, height) = if kind == "image" {
         image::image_dimensions(&path)
@@ -135,8 +146,7 @@ pub fn import_bytes(
         write_thumbnail(&state.paths.assets_dir, &name, &path);
     }
 
-    let hash = Sha256::digest(bytes);
-    let size = bytes.len() as i64;
+    let hash = hasher.finalize();
     state.with_db(|conn| {
         conn.execute(
             "INSERT INTO asset(name, kind, ext, size, width, height, duration_ms, hash, \
@@ -145,7 +155,7 @@ pub fn import_bytes(
                 name,
                 kind,
                 ext,
-                size,
+                size as i64,
                 width,
                 height,
                 hash.as_slice(),
@@ -160,22 +170,30 @@ pub fn import_bytes(
         name,
         kind,
         ext,
-        size: bytes.len() as u64,
+        size,
         width,
         height,
     })
 }
 
-pub fn import_files(state: &AppState, files: Vec<ImportFile>) -> Result<Vec<AssetDto>, AppError> {
-    let mut out = Vec::new();
-    for file in files {
-        let bytes = decode_payload(&file.data)?;
-        if bytes.is_empty() {
-            continue;
-        }
-        out.push(import_bytes(state, &file.orig_name, &bytes)?);
+pub fn import_bytes(state: &AppState, orig_name: &str, bytes: &[u8]) -> Result<AssetDto, AppError> {
+    let mut cursor = bytes;
+    import_reader(state, orig_name, &mut cursor)
+}
+
+pub fn import_path(state: &AppState, path: &Path) -> Result<Option<AssetDto>, AppError> {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !is_media_name(&name) {
+        return Ok(None);
     }
-    Ok(out)
+    if !fs::metadata(path)?.is_file() {
+        return Ok(None);
+    }
+    let mut input = fs::File::open(path)?;
+    import_reader(state, &name, &mut input).map(Some)
 }
 
 pub fn scan_asset_refs(content: &str) -> Vec<(String, String)> {

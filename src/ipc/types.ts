@@ -116,10 +116,6 @@ export interface Asset {
   height: number | null;
 }
 
-export interface ImportFile {
-  origName: string;
-  data: string;
-}
 
 export interface ExportReport {
   dir: string;

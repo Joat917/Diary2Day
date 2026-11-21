@@ -234,7 +234,7 @@ export const zhCN = {
   "me.lockDelaySeconds": "{n} 秒",
   "me.lockDelayMinutes": "{n} 分钟",
   "me.about": "关于",
-  "me.version": "版本 {version} · M2",
+  "me.version": "版本 {version}",
   "me.exportSoon": "导出与备份已在上方提供",
 
   "weekday.0": "日",

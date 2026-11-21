@@ -232,7 +232,7 @@ export const en = {
   "me.lockDelaySeconds": "{n} seconds",
   "me.lockDelayMinutes": "{n} minutes",
   "me.about": "About",
-  "me.version": "Version {version} · M2",
+  "me.version": "Version {version}",
   "me.exportSoon": "Export and backup are available above",
 
   "weekday.0": "Sun",

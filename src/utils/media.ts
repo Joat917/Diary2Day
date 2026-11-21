@@ -1,45 +1,59 @@
-import { mediaImport } from "../ipc/client";
-import type { Asset } from "../ipc/types";
+import { mediaImportPaths, mediaPasteImport, mediaPickImport } from "../ipc/client";
+import type { Asset, AssetKind } from "../ipc/types";
 import type { MessageKey } from "../i18n";
 
-export function isMediaFile(file: File): boolean {
-  return /^(image|audio|video)\//.test(file.type);
+const KIND_BY_EXT: Record<string, AssetKind> = {
+  jpg: "image",
+  jpeg: "image",
+  png: "image",
+  gif: "image",
+  webp: "image",
+  bmp: "image",
+  avif: "image",
+  mp3: "audio",
+  wav: "audio",
+  ogg: "audio",
+  m4a: "audio",
+  aac: "audio",
+  flac: "audio",
+  mp4: "video",
+  webm: "video",
+  mov: "video",
+  mkv: "video",
+};
+
+function extOf(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? "";
+  return base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
 }
 
-export function insertLabelKey(files: File[]): MessageKey {
-  const kinds = new Set(files.map((file) => file.type.slice(0, file.type.indexOf("/"))));
-  if (kinds.size === 1) {
-    if (kinds.has("image")) return "editor.insertingImage";
-    if (kinds.has("video")) return "editor.insertingVideo";
-    if (kinds.has("audio")) return "editor.insertingAudio";
+export function mediaKindOfPath(path: string): AssetKind | null {
+  return KIND_BY_EXT[extOf(path)] ?? null;
+}
+
+export function isMediaFile(file: File): boolean {
+  if (/^(image|audio|video)\//.test(file.type)) return true;
+  return extOf(file.name) in KIND_BY_EXT;
+}
+
+export function insertLabelKey(kinds: AssetKind[]): MessageKey {
+  const set = new Set(kinds);
+  if (set.size === 1) {
+    if (set.has("image")) return "editor.insertingImage";
+    if (set.has("video")) return "editor.insertingVideo";
+    if (set.has("audio")) return "editor.insertingAudio";
   }
   return "editor.insertingMedia";
 }
 
-function fallbackName(file: File): string {
-  if (file.name) return file.name;
-  if (file.type.startsWith("image/")) return "pasted.png";
-  if (file.type.startsWith("audio/")) return "audio.mp3";
-  return "video.mp4";
+export function pickMedia(): Promise<Asset[]> {
+  return mediaPickImport();
 }
 
-function readFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+export function pasteMedia(): Promise<Asset[]> {
+  return mediaPasteImport();
 }
 
-export async function importMediaFiles(files: File[]): Promise<Asset[]> {
-  const media = files.filter(isMediaFile);
-  if (!media.length) return [];
-  const payload = await Promise.all(
-    media.map(async (file) => ({
-      origName: fallbackName(file),
-      data: await readFile(file),
-    })),
-  );
-  return mediaImport(payload);
+export function importMediaPaths(paths: string[]): Promise<Asset[]> {
+  return mediaImportPaths(paths);
 }
