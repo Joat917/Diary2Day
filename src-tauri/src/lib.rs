@@ -1,4 +1,5 @@
 mod backup_crypt;
+mod backup_secret;
 mod commands;
 mod db;
 mod domain;
@@ -55,6 +56,8 @@ pub fn run() {
             commands::data::data_import_md,
             commands::data::data_backup,
             commands::data::data_restore,
+            commands::data::backup_password_get,
+            commands::data::backup_password_set,
             #[cfg(target_os = "android")]
             commands::android_data::data_export_android,
             #[cfg(target_os = "android")]

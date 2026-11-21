@@ -8,14 +8,19 @@ const props = withDefaults(
     mode: "create" | "restore";
     busy?: boolean;
     error?: string | null;
+    initialPassword?: string | null;
   }>(),
-  { busy: false, error: null },
+  { busy: false, error: null, initialPassword: null },
 );
 
-const emit = defineEmits<{ submit: [password: string | null]; cancel: [] }>();
+const emit = defineEmits<{
+  submit: [password: string | null, remember: boolean];
+  cancel: [];
+}>();
 
 const password = ref("");
 const confirmPassword = ref("");
+const remember = ref(false);
 const localError = ref<string | null>(null);
 const firstInput = ref<HTMLInputElement | null>(null);
 
@@ -38,8 +43,9 @@ watch(
   () => props.open,
   async (open) => {
     if (!open) return;
-    password.value = "";
-    confirmPassword.value = "";
+    password.value = props.initialPassword ?? "";
+    confirmPassword.value = password.value;
+    remember.value = password.value.length > 0;
     localError.value = null;
     await nextTick();
     firstInput.value?.focus();
@@ -55,11 +61,11 @@ function submit() {
       localError.value = t("me.backupPwRequired");
       return;
     }
-    emit("submit", value);
+    emit("submit", value, remember.value);
     return;
   }
   if (!value && !confirmPassword.value) {
-    emit("submit", null);
+    emit("submit", null, remember.value);
     return;
   }
   if (value.trim() !== value) {
@@ -70,7 +76,7 @@ function submit() {
     localError.value = t("me.backupPwMismatch");
     return;
   }
-  emit("submit", value);
+  emit("submit", value, remember.value);
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -115,6 +121,10 @@ function onKeydown(event: KeyboardEvent) {
               @input="localError = null"
               @keydown="onKeydown"
             />
+          </label>
+          <label class="remember">
+            <input v-model="remember" type="checkbox" />
+            <span>{{ t("me.backupRemember") }}</span>
           </label>
           <p v-if="localError || error" class="error-text">{{ localError || error }}</p>
           <div class="actions">
@@ -193,6 +203,23 @@ function onKeydown(event: KeyboardEvent) {
 .input:focus-visible {
   border-color: var(--c-primary);
   outline: none;
+}
+
+.remember {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  color: var(--c-on-surface-muted);
+  font-size: var(--t-small);
+  line-height: var(--t-small-lh);
+  cursor: pointer;
+}
+
+.remember input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--c-primary);
 }
 
 .error-text {

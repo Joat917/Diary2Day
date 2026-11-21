@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::{
+    backup_secret,
     commands::run_blocking,
     error::AppError,
     export::{self, BackupReport, ExportReport, ImportReport},
@@ -47,6 +48,24 @@ pub async fn data_restore(
     let st = state.inner().clone();
     run_blocking(st, move |state| {
         export::restore(&state, &path, password.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn backup_password_get(state: State<'_, AppState>) -> Result<Option<String>, AppError> {
+    let st = state.inner().clone();
+    run_blocking(st, |state| backup_secret::read(&state)).await
+}
+
+#[tauri::command]
+pub async fn backup_password_set(
+    state: State<'_, AppState>,
+    password: Option<String>,
+) -> Result<(), AppError> {
+    let st = state.inner().clone();
+    run_blocking(st, move |state| {
+        backup_secret::write(&state, password.as_deref())
     })
     .await
 }

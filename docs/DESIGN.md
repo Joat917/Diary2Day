@@ -181,6 +181,8 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `data_export_dir` | `target_dir` → `ExportReport{dir, journals, assets}` | 桌面。同步等待完成；在 `target_dir` 下新建 `Diary2Day-<ts>/`，人可读 md + `assets/`（PRD §5.2、§6.4）。Android 走 `data_export_android`（§3.2） |
 | `data_backup` | `target, password?` → `BackupReport{path, size}` | 桌面。`VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip；带口令时再加密成 `.ddbak`（§6.5）。Android 走 `data_backup_android` |
 | `data_restore` | `path, password?` → `ImportReport{journals, assets}` | 桌面。只支持整库替换，不做 merge；加密包先解密再校验 schema、换连接并重载锁运行时（§6.5）。Android 走 `data_pick_restore_android` + `data_restore_android` |
+| `backup_password_get` | → `password` 或 `null` | 读取本机记住的备份口令（`data_dir/backup-password.bin`，固定密钥加密，§6.5）；锁态返回 `locked` |
+| `backup_password_set` | `password?` → `void` | 写入或删除（`null`）记住的口令；该文件不进入备份包（§6.5） |
 | `data_import_md` | `dir` → `ImportReport{journals, assets}` | 桌面。与 export 对称（§6.4）；同一 `id` 按 upsert 处理。Android 走 `data_import_android` |
 | `data_export_android` | → `ExportReport` 或 `null` | Android。`Picker::pick_dir` 选目标树，`cache/export` 暂存后逐文件写入 SAF；取消返回 `null`（§3.2） |
 | `data_import_android` | → `ImportReport` 或 `null` | Android。`pick_dir` → `cache/import` → 复用 `import_dir`；取消 `null` |
@@ -320,6 +322,8 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 **6.5 备份 / 恢复 / 锁**
 备份 = `VACUUM INTO 'cache/backup/live.db'` + assets + `manifest.json{app_version, schema_version, counts, created_at, media_included}` → zip。恢复 = 校验 manifest（`schema_version` 高于当前 → `restore_version_mismatch`，提示先升级应用）→ 解包到 `cache/restore/` → checkpoint 后用占位连接换出旧库、复制新库并重开迁移 → 从新库重载 `app_lock` 运行时并 emit `dd://lock-state` → 广播 `all` 失效。恢复是整库替换，没有 merge 策略。Android 上备份位置由 `data_backup_android` 的 `save_file` 决定；恢复前 `data_pick_restore_android` 先把选的备份包（zip / ddbak）复制进 `cache/restore-pick`，确认后再走同一条恢复管线（§3.2）。
+
+**记住口令**：`backup-password.bin` 放在 `data_dir` 根部，内容 = `[24B 随机 nonce][XChaCha20-Poly1305 密文]`，密钥是源码常量，与 `.ddbak` 的口令派生无关。它只避免明文落盘，拿到安装包即可解密，不当作安全边界。备份 zip 只写 `manifest.json` / `diary.db` / `assets/`，恢复只替换库与附件，所以这个文件既不进备份也不会被恢复覆盖。前端在打开创建/恢复对话框前调 `backup_password_get` 预填，操作成功后按复选框调 `backup_password_set`（`null` 即删除）；失败的操作不改变记录。
 
 **加密备份**：`.ddbak` = 68 字节明文头 + 帧流。头：magic `DD2BAK01`、版本、KDF（Argon2id）、算法（XChaCha20-Poly1305）、m/t/p、块大小、16B salt、24B nonce 基。帧：`[u32 明文长度][密文+16B tag]`，零长尾帧收尾；帧 nonce = nonce 基后 8 字节 + 帧号（BE），AAD = 头部，因此重排、截断、改头都会认证失败。`backup()` 带口令时先生成普通 zip 到 `cache/backup/payload.zip`，再流式加密到目标并删除中间包；`restore()` 读头判定，加密包缺口令返回 `password_required`，解密失败统一 `bad_password`，解密到 `cache/restore-decrypt/`，完整解密后才进入整库替换，结束后无论成败都删掉这份明文 zip。无口令的普通 zip 路径完全不变。
 锁 = 口令经 SHA-256(`salt:code`) 存 `app_lock` 单行表，前端 `LockOverlay` 与 Rust 门禁双保险：锁态期间 `run_blocking` 直接返回 `locked`；前端监听 `window blur` / `visibilitychange` 起 `lockLeaveDelayS` 计时（0 表示从不），到点调 `app_lock_engage`。设置与锁状态查询走 `run_blocking_public`，保证锁屏也能渲染主题；`asset_paths` 同样公开（只返回目录路径）。启动即锁定时 `App.vue` 的 `viewsReady` 拦住路由视图挂载，第一次解锁后才挂载并取数；解锁时再递增 `viewEpoch` 强制重建，运行时加锁则保留视图、只盖遮罩。`asset` 协议本身不参与锁门禁（§3.1）。明确告诉用户这是 UI 门，文件不加密。

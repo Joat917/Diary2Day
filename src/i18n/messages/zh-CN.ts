@@ -206,6 +206,7 @@ export const zhCN = {
   "me.backupPwMismatch": "两次输入不一致",
   "me.backupPwRequired": "请输入口令",
   "me.backupPwWrong": "口令不正确，或备份已损坏",
+  "me.backupRemember": "记住口令",
   "me.backupStart": "开始备份",
   "me.restore": "恢复备份",
   "me.restorePasswordTitle": "输入备份口令",

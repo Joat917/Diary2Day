@@ -204,6 +204,7 @@ export const en = {
   "me.backupPwMismatch": "Passwords do not match",
   "me.backupPwRequired": "Enter the password",
   "me.backupPwWrong": "Wrong password, or the backup is damaged",
+  "me.backupRemember": "Remember password",
   "me.backupStart": "Start backup",
   "me.restore": "Restore backup",
   "me.restorePasswordTitle": "Enter backup password",

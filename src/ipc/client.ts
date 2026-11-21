@@ -207,6 +207,14 @@ export function dataRestore(path: string, password?: string | null): Promise<Imp
   return call("data_restore", { path, password: password ?? null });
 }
 
+export function backupPasswordGet(): Promise<string | null> {
+  return call("backup_password_get");
+}
+
+export function backupPasswordSet(password: string | null): Promise<void> {
+  return call("backup_password_set", { password: password ?? null });
+}
+
 export function dataExportAndroid(): Promise<ExportReport | null> {
   return call("data_export_android");
 }

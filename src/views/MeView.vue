@@ -15,6 +15,8 @@ import {
   mdiTrashCanOutline,
 } from "@mdi/js";
 import {
+  backupPasswordGet,
+  backupPasswordSet,
   dataBackup,
   dataBackupAndroid,
   dataExportAndroid,
@@ -274,6 +276,26 @@ const backupDialog = ref<BackupDialogMode | null>(null);
 const backupPath = ref<string | null>(null);
 const backupBusy = ref(false);
 const backupDialogError = ref<string | null>(null);
+const rememberedPassword = ref<string | null>(null);
+
+async function loadRememberedPassword() {
+  try {
+    rememberedPassword.value = await backupPasswordGet();
+  } catch (err) {
+    rememberedPassword.value = null;
+    opError.value = describeError(err);
+  }
+}
+
+async function persistRememberedPassword(password: string | null, remember: boolean) {
+  const value = remember ? password : null;
+  rememberedPassword.value = value;
+  try {
+    await backupPasswordSet(value);
+  } catch (err) {
+    opError.value = describeError(err);
+  }
+}
 
 function isPasswordRequired(err: unknown): boolean {
   return err instanceof IpcError && err.code === "password_required";
@@ -293,16 +315,18 @@ function backupFileName(encrypted: boolean): string {
   return `Diary2Day-Backup-${stamp}.${encrypted ? "ddbak" : "zip"}`;
 }
 
-function openBackup() {
+async function openBackup() {
   if (opBusy.value) return;
   backupPath.value = null;
   backupDialogError.value = null;
+  await loadRememberedPassword();
   backupDialog.value = "create";
 }
 
-function askRestorePassword(path: string) {
+async function askRestorePassword(path: string) {
   backupPath.value = path;
   backupDialogError.value = null;
+  await loadRememberedPassword();
   backupDialog.value = "restore";
 }
 
@@ -322,7 +346,7 @@ async function restoreFrom(path: string, password?: string | null) {
   await Promise.all([loadInfo(), loadTrash()]);
 }
 
-async function submitBackup(password: string | null) {
+async function submitBackup(password: string | null, remember: boolean) {
   if (backupBusy.value) return;
   const mode = backupDialog.value;
   if (!mode) return;
@@ -337,13 +361,15 @@ async function submitBackup(password: string | null) {
     await runOp(t("me.restore"), async () => {
       try {
         await restoreFrom(path, password);
-        backupDialog.value = null;
-        backupPath.value = null;
       } catch (err) {
         backupDialogError.value = isPasswordRequired(err)
           ? t("me.backupPwRequired")
           : backupDialogMessage(err);
+        return;
       }
+      backupDialog.value = null;
+      backupPath.value = null;
+      await persistRememberedPassword(password, remember);
     });
     backupBusy.value = false;
     return;
@@ -356,6 +382,7 @@ async function submitBackup(password: string | null) {
       const report = await dataBackupAndroid(password);
       if (!report) return;
       notice.value = t("me.backupDone", { size: formatBytes(report.size) });
+      await persistRememberedPassword(password, remember);
     });
     return;
   }
@@ -368,6 +395,7 @@ async function submitBackup(password: string | null) {
   await runOp(t("me.backup"), async () => {
     const report = await dataBackup(target, password);
     notice.value = t("me.backupDone", { size: formatBytes(report.size) });
+    await persistRememberedPassword(password, remember);
   });
 }
 
@@ -454,7 +482,7 @@ async function runPending() {
         await restoreFrom(action.path);
       } catch (err) {
         if (isPasswordRequired(err)) {
-          askRestorePassword(action.path);
+          await askRestorePassword(action.path);
           return;
         }
         throw err;
@@ -860,6 +888,7 @@ onBeforeUnmount(() => {
       :mode="backupDialog === 'restore' ? 'restore' : 'create'"
       :busy="backupBusy"
       :error="backupDialogError"
+      :initial-password="rememberedPassword"
       @submit="submitBackup"
       @cancel="closeBackupDialog"
     />
