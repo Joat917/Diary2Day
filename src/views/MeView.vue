@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   mdiChevronDown,
+  mdiChevronRight,
   mdiCloudDownloadOutline,
   mdiCloudUploadOutline,
+  mdiContentCopy,
   mdiFileExportOutline,
   mdiFileImportOutline,
   mdiFolderOpenOutline,
@@ -31,8 +34,9 @@ import {
   onOpProgress,
   openDataDir,
 } from "../ipc/client";
-import type { DataInfo, JournalSummary, OpProgress, Theme } from "../ipc/types";
+import type { DataInfo, JournalSummary, OpProgress } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
+import { themeOption } from "../constants/themes";
 import { version as appVersion } from "../../package.json";
 import { useLock } from "../stores/lock";
 import { useSession } from "../stores/session";
@@ -48,6 +52,7 @@ import Icon from "../components/Icon.vue";
 import StateBlock from "../components/StateBlock.vue";
 
 const session = useSession();
+const router = useRouter();
 const lock = useLock();
 const info = ref<DataInfo | null>(null);
 const mobile = computed(() => info.value?.mobile === true);
@@ -56,7 +61,18 @@ const trashLoading = ref(true);
 const trashError = ref<string | null>(null);
 const failure = ref<string | null>(null);
 
-const themes: Theme[] = ["system", "light", "dark"];
+const themeLabel = computed(() => t(themeOption(session.settings.theme).labelKey));
+
+const stats = computed(() => {
+  const data = info.value;
+  return [
+    { label: t("me.database"), value: data ? formatBytes(data.db_size) : "—" },
+    { label: t("me.assets"), value: data ? formatBytes(data.assets_size) : "—" },
+    { label: t("me.journals"), value: data ? String(data.counts.journals) : "—" },
+    { label: t("me.trash"), value: data ? String(data.counts.trash) : "—" },
+    { label: t("me.words"), value: data ? String(data.counts.words) : "—" },
+  ];
+});
 
 const weekdayOptions = computed(() =>
   Array.from({ length: 7 }, (_, index) => ({
@@ -86,10 +102,6 @@ async function loadTrash() {
   } finally {
     trashLoading.value = false;
   }
-}
-
-async function setTheme(theme: Theme) {
-  await session.patch({ theme });
 }
 
 async function setLanguage(value: string) {
@@ -135,6 +147,17 @@ async function openFolder() {
     await openDataDir();
   } catch (err) {
     failure.value = describeError(err);
+  }
+}
+
+async function copyPath() {
+  const path = info.value?.data_dir;
+  if (!path) return;
+  opError.value = null;
+  try {
+    await navigator.clipboard.writeText(path);
+  } catch (err) {
+    opError.value = describeError(err);
   }
 }
 
@@ -393,17 +416,10 @@ onBeforeUnmount(() => {
         <div class="rows">
           <div class="row">
             <span class="label">{{ t("me.theme") }}</span>
-            <div class="segmented">
-              <button
-                v-for="theme in themes"
-                :key="theme"
-                type="button"
-                :class="{ active: session.settings.theme === theme }"
-                @click="setTheme(theme)"
-              >
-                {{ t(`me.theme.${theme}` as MessageKey) }}
-              </button>
-            </div>
+            <button class="theme-link" type="button" @click="router.push('/theme')">
+              <span class="value">{{ themeLabel }}</span>
+              <Icon :path="mdiChevronRight" :size="18" />
+            </button>
           </div>
           <div class="row">
             <span class="label">{{ t("me.language") }}</span>
@@ -567,31 +583,36 @@ onBeforeUnmount(() => {
 
       <section class="group">
         <h2 class="group-title">{{ t("me.data") }}</h2>
+        <div class="stats">
+          <div v-for="stat in stats" :key="stat.label" class="stat">
+            <span class="stat-label">{{ stat.label }}</span>
+            <span class="stat-value">{{ stat.value }}</span>
+          </div>
+        </div>
         <div class="rows">
-          <div v-if="info && !mobile" class="row stack">
-            <span class="label">{{ t("me.dataDir") }}</span>
-            <code class="path">{{ info?.data_dir ?? "—" }}</code>
-          </div>
-          <div class="row">
-            <span class="label">{{ t("me.database") }}</span>
-            <span class="value">{{ formatBytes(info?.db_size ?? 0) }}</span>
-          </div>
-          <div class="row">
-            <span class="label">{{ t("me.assets") }}</span>
-            <span class="value">{{ formatBytes(info?.assets_size ?? 0) }}</span>
-          </div>
-          <div v-if="info" class="row">
-            <span class="label">{{ t("me.counts", {
-              journals: info.counts.journals,
-              trash: info.counts.trash,
-              words: info.counts.words,
-            }) }}</span>
-          </div>
           <div v-if="info && !mobile" class="row">
-            <button class="text-btn" type="button" @click="openFolder">
-              <Icon :path="mdiFolderOpenOutline" :size="18" />
-              {{ t("me.openDataDir") }}
-            </button>
+            <div class="row-main">
+              <span class="label">{{ t("me.dataDir") }}</span>
+              <code class="path">{{ info?.data_dir ?? "—" }}</code>
+            </div>
+            <div class="dir-actions">
+              <button
+                class="icon-btn"
+                type="button"
+                :aria-label="t('me.openDataDir')"
+                @click="openFolder"
+              >
+                <Icon :path="mdiFolderOpenOutline" :size="20" />
+              </button>
+              <button
+                class="icon-btn"
+                type="button"
+                :aria-label="t('me.copyPath')"
+                @click="copyPath"
+              >
+                <Icon :path="mdiContentCopy" :size="18" />
+              </button>
+            </div>
           </div>
           <button
             class="row action-row"
@@ -805,6 +826,40 @@ onBeforeUnmount(() => {
   margin-bottom: var(--s-2);
 }
 
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 1px;
+  margin-bottom: var(--s-3);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-md);
+  background: var(--c-hairline);
+  overflow: hidden;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--s-3) var(--s-2);
+  background: var(--c-surface-1);
+}
+
+.stat-label {
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  color: var(--c-on-surface-muted);
+}
+
+.stat-value {
+  font-size: var(--t-title);
+  line-height: var(--t-title-lh);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .rows {
   border-radius: var(--r-md);
   background: var(--c-surface-1);
@@ -827,12 +882,6 @@ onBeforeUnmount(() => {
   border-bottom: none;
 }
 
-.row.stack {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s-1);
-  padding-block: var(--s-3);
-}
 
 .label {
   color: var(--c-on-surface);
@@ -860,6 +909,11 @@ onBeforeUnmount(() => {
   color: var(--c-on-surface-faint);
 }
 
+.dir-actions {
+  display: flex;
+  flex: none;
+}
+
 .path {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -868,25 +922,18 @@ onBeforeUnmount(() => {
   word-break: break-all;
 }
 
-.segmented {
+.theme-link {
   display: inline-flex;
-  padding: 2px;
-  border-radius: var(--r-pill);
-  background: var(--c-surface-2);
-}
-
-.segmented button {
-  padding: var(--s-1) var(--s-3);
-  border-radius: var(--r-pill);
-  font-size: var(--t-small);
+  align-items: center;
+  gap: var(--s-1);
   color: var(--c-on-surface-muted);
-  min-height: 32px;
+  flex: none;
 }
 
-.segmented button.active {
-  background: var(--c-surface-1);
-  color: var(--c-primary);
-  box-shadow: var(--e-1);
+@media (hover: hover) {
+  .theme-link:hover {
+    color: var(--c-primary);
+  }
 }
 
 .select-wrap {

@@ -1,4 +1,12 @@
-export type Theme = "system" | "light" | "dark";
+export type Theme =
+  | "light"
+  | "warm"
+  | "mist"
+  | "blossom"
+  | "dark"
+  | "midnight"
+  | "mocha"
+  | "forest";
 export type DateFormat = "slash" | "short" | "zh";
 export type LocaleCode = "zh-CN" | "en";
 export type CardTime = "recorded" | "updated";

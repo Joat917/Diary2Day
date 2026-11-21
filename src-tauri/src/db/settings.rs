@@ -24,6 +24,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            // "system" 只是首次启动的哨兵值：前端按系统明暗落成具体主题后立即写回。
             theme: "system".into(),
             language: "zh-CN".into(),
             date_format: "slash".into(),
@@ -95,7 +96,11 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
 }
 
 fn validate(settings: &Settings) -> Result<(), AppError> {
-    if !matches!(settings.theme.as_str(), "system" | "light" | "dark") {
+    if !matches!(
+        settings.theme.as_str(),
+        "system" | "light" | "warm" | "mist" | "blossom" | "dark" | "midnight" | "mocha"
+            | "forest"
+    ) {
         return Err(AppError::new("bad_setting", "未知主题"));
     }
     if !matches!(settings.language.as_str(), "zh-CN" | "en") {

@@ -14,7 +14,7 @@ html {
   color-scheme: light;
 }
 
-html[data-theme="dark"] {
+html[data-scheme="dark"] {
   color-scheme: dark;
 }
 

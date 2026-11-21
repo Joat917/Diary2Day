@@ -20,6 +20,11 @@ const router = createRouter({
       component: () => import("./views/MeView.vue"),
     },
     {
+      path: "/theme",
+      name: "theme",
+      component: () => import("./views/ThemeView.vue"),
+    },
+    {
       path: "/j/:id",
       name: "detail",
       component: () => import("./views/DetailView.vue"),

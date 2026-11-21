@@ -224,7 +224,7 @@ const dateText = computed(() => {
 });
 
 function isDark(): boolean {
-  return document.documentElement.dataset.theme === "dark";
+  return document.documentElement.dataset.scheme === "dark";
 }
 
 function onPreviewClick(event: MouseEvent) {

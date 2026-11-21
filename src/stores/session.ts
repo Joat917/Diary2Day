@@ -1,11 +1,12 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { settingsGetAll, settingsPatch } from "../ipc/client";
-import type { Settings } from "../ipc/types";
+import type { Settings, Theme } from "../ipc/types";
+import { isDarkTheme } from "../constants/themes";
 import { setLocale } from "../i18n";
 
 const defaults: Settings = {
-  theme: "system",
+  theme: "light",
   language: "zh-CN",
   dateFormat: "slash",
   weekStart: 1,
@@ -24,36 +25,47 @@ export const useSession = defineStore("session", () => {
   const ready = ref(false);
   const media = window.matchMedia("(prefers-color-scheme: dark)");
 
+  function autoTheme(): Theme {
+    return media.matches ? "dark" : "light";
+  }
+
+  // 库里的 "system" 只是首次启动的默认值：按系统明暗落成浅色/深色第一套后写回。
+  function normalized(next: Settings): Settings {
+    return (next.theme as string) === "system" ? { ...next, theme: autoTheme() } : next;
+  }
+
   function applyTheme() {
-    const theme =
-      settings.value.theme === "system"
-        ? media.matches
-          ? "dark"
-          : "light"
-        : settings.value.theme;
+    const theme = settings.value.theme;
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.scheme = isDarkTheme(theme) ? "dark" : "light";
     document.documentElement.dataset.motion = settings.value.reduceMotion ? "reduced" : "full";
     setLocale(settings.value.language);
   }
 
-  media.addEventListener("change", () => {
-    if (settings.value.theme === "system") applyTheme();
-  });
-
   async function load() {
+    let firstRun = false;
     try {
-      settings.value = await settingsGetAll();
+      const stored = await settingsGetAll();
+      firstRun = (stored.theme as string) === "system";
+      settings.value = normalized(stored);
     } catch (error) {
       console.error("[session] settings load failed", error);
-      settings.value = { ...defaults };
+      settings.value = { ...defaults, theme: autoTheme() };
     } finally {
       ready.value = true;
       applyTheme();
     }
+    if (firstRun) {
+      try {
+        settings.value = normalized(await settingsPatch({ theme: settings.value.theme }));
+      } catch (error) {
+        console.error("[session] theme persist failed", error);
+      }
+    }
   }
 
   async function patch(next: Partial<Settings>) {
-    settings.value = await settingsPatch(next);
+    settings.value = normalized(await settingsPatch(next));
     applyTheme();
   }
 

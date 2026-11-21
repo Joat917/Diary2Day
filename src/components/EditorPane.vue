@@ -137,7 +137,7 @@ onMounted(() => {
     height: "100%",
     cache: { enable: false },
     placeholder: t("today.placeholder"),
-    theme: document.documentElement.dataset.theme === "dark" ? "dark" : "classic",
+    theme: document.documentElement.dataset.scheme === "dark" ? "dark" : "classic",
     toolbar: [
       {
         name: "dd-image",
