@@ -4,6 +4,7 @@ import type {
   Asset,
   AssetPaths,
   BackupReport,
+  CleanupReport,
   DataChanged,
   DataInfo,
   DayMark,
@@ -192,6 +193,10 @@ export function mediaImportPaths(paths: string[]): Promise<Asset[]> {
 
 export function assetGc(names: string[]): Promise<number> {
   return call("asset_gc", { names });
+}
+
+export function assetCleanUnused(): Promise<CleanupReport> {
+  return call("asset_clean_unused");
 }
 
 export function shareDrain(): Promise<ShareReport | null> {

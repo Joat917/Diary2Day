@@ -5,6 +5,7 @@ use crate::{
     db::journal::{self, DayMark, Journal, JournalPage, ListParams, SaveInput},
     error::AppError,
     events::{self, DataChanged},
+    fs::assets,
     state::AppState,
 };
 
@@ -141,7 +142,12 @@ pub async fn journal_restore(state: State<'_, AppState>, id: String) -> Result<S
 pub async fn journal_purge(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     let st = state.inner().clone();
     run_blocking(st, move |state| {
-        state.with_db(|conn| journal::purge(conn, &id))
+        let content = state.with_db(|conn| journal::trashed_content(conn, &id))?;
+        state.with_db(|conn| journal::purge(conn, &id))?;
+        if let Some(content) = content {
+            assets::remove_orphans(&state, &[content])?;
+        }
+        Ok(())
     })
     .await
 }
@@ -149,7 +155,13 @@ pub async fn journal_purge(state: State<'_, AppState>, id: String) -> Result<(),
 #[tauri::command]
 pub async fn journal_empty_trash(state: State<'_, AppState>) -> Result<i64, AppError> {
     let st = state.inner().clone();
-    run_blocking(st, move |state| state.with_db(journal::empty_trash)).await
+    run_blocking(st, move |state| {
+        let contents = state.with_db(|conn| journal::all_trashed_contents(conn))?;
+        let count = state.with_db(|conn| journal::empty_trash(conn))?;
+        assets::remove_orphans(&state, &contents)?;
+        Ok(count)
+    })
+    .await
 }
 
 #[tauri::command]

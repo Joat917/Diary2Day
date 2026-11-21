@@ -133,6 +133,11 @@ export interface BackupReport {
   size: number;
 }
 
+export interface CleanupReport {
+  removed: number;
+  freed: number;
+}
+
 export interface PickedBackup {
   path: string;
 }

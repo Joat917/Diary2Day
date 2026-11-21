@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +7,7 @@ use rusqlite::params;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::db::journal;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -289,5 +291,71 @@ pub fn gc_unused(state: &AppState, names: Vec<String>) -> Result<usize, AppError
         }
     }
     Ok(removed)
+}
+
+/// Deletes assets referenced by permanently removed entries unless a remaining
+/// entry still mentions them.
+pub fn remove_orphans(state: &AppState, contents: &[String]) -> Result<(), AppError> {
+    let mut names: Vec<String> = Vec::new();
+    for (_, name) in contents
+        .iter()
+        .flat_map(|content| scan_asset_refs(content.as_str()))
+    {
+        if checked_kind(&name).is_some() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    for name in names {
+        let still_used = state.with_db(|conn| {
+            Ok::<bool, AppError>(conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM journal WHERE instr(content, ?1) > 0)",
+                [&name],
+                |row| row.get(0),
+            )?)
+        })?;
+        if !still_used {
+            remove_unused(state, &name)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupReport {
+    pub removed: usize,
+    pub freed: u64,
+}
+
+/// Deletes every media file in `assets_dir` that no journal content references.
+/// Runs only on explicit request; the editing session's own garbage collection
+/// stays the default.
+pub fn clean_unused(state: &AppState) -> Result<CleanupReport, AppError> {
+    let contents = state.with_db(|conn| journal::all_contents(conn))?;
+    let used: HashSet<String> = contents
+        .iter()
+        .flat_map(|content| scan_asset_refs(content.as_str()))
+        .map(|(_, name)| name)
+        .collect();
+
+    let mut candidates: Vec<(String, u64)> = Vec::new();
+    for entry in fs::read_dir(&state.paths.assets_dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if checked_kind(&name).is_none() || used.contains(&name) {
+            continue;
+        }
+        let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        candidates.push((name, size));
+    }
+
+    let mut removed = 0;
+    let mut freed = 0;
+    for (name, size) in candidates {
+        if remove_unused(state, &name)? {
+            removed += 1;
+            freed += size;
+        }
+    }
+    Ok(CleanupReport { removed, freed })
 }
 

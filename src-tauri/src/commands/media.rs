@@ -5,7 +5,7 @@ use tauri::State;
 use crate::{
     commands::run_blocking,
     error::AppError,
-    fs::assets::{self, AssetDto},
+    fs::assets::{self, AssetDto, CleanupReport},
     state::AppState,
 };
 
@@ -43,6 +43,12 @@ pub async fn media_import_paths(
 pub async fn asset_gc(state: State<'_, AppState>, names: Vec<String>) -> Result<usize, AppError> {
     let st = state.inner().clone();
     run_blocking(st, move |state| assets::gc_unused(&state, names)).await
+}
+
+#[tauri::command]
+pub async fn asset_clean_unused(state: State<'_, AppState>) -> Result<CleanupReport, AppError> {
+    let st = state.inner().clone();
+    run_blocking(st, move |state| assets::clean_unused(&state)).await
 }
 
 #[cfg(not(target_os = "android"))]

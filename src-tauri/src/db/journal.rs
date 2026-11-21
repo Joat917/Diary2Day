@@ -573,6 +573,36 @@ pub fn empty_trash(conn: &mut Connection) -> Result<i64, AppError> {
     Ok(count as i64)
 }
 
+pub fn trashed_content(conn: &Connection, id: &str) -> Result<Option<String>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT content FROM journal WHERE id = ?1 AND deleted_at IS NOT NULL",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn all_trashed_contents(conn: &Connection) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn.prepare("SELECT content FROM journal WHERE deleted_at IS NOT NULL")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn all_contents(conn: &Connection) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn.prepare("SELECT content FROM journal")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 pub fn set_pinned(conn: &Connection, id: &str, value: bool) -> Result<(), AppError> {
     let changed = conn.execute(
         "UPDATE journal SET pinned = ?1, updated_at = ?2 WHERE id = ?3",

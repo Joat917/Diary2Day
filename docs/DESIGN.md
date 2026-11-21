@@ -167,7 +167,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `journal_get` | `id` → `Journal`（全量 + tag 对象） | |
 | `journal_save` | `id? content format title mood weather tag_ids recorded_at recorded_off pinned revision` → `Journal` | 唯一写入口。`weather` 只接受 17 个固定 code 或 null，其余返回 `bad_weather`。`day_key` 用当前 `day_boundary_minutes` 现算（§2.1）。同事务：`day_key`、`words`、`asset_n`/`audio_n`/`video_n`/`cover_asset`、派生 title、diff `journal_tag`、增量 `day_mark`、FTS 触发器、`revision+1`。空内容的新建由前端拦截（§5） |
 | `journal_delete` | `id` → `day_key` | 软删；同事务更新 `day_mark` |
-| `journal_restore` / `journal_purge` | `id` / 无参 | purge 由 janitor 调，UI 也提供"清空回收站" |
+| `journal_restore` / `journal_purge` | `id` / 无参 | 软删除只改 `deleted_at`。彻底删除与清空回收站都先取正文，删行后清理不再被任何条目引用的附件（§3.1） |
 | `journal_trash_list` | `limit cursor` → `JournalPage` | |
 | `journal_set_pinned` / `journal_set_sensitive` | `id value` → unit | 入参只有 id 与值 |
 | `day_marks` | `from_key to_key` → `DayMark[]` | 周条与整月共用；切月查月区间 |
@@ -179,6 +179,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `media_pick_import` | → `Asset[]` | 打开系统选择器后由 Rust 直接读取选中文件：桌面用 `dialog` 插件，Android 用 SAF `Picker::pick_files`。取消返回空数组；只回元数据，字节不过 IPC。按 64 KiB 分块边读边写，内存不随文件增长；图片抽尺寸并产出缩略图（§3.1） |
 | `media_paste_import` | → `Asset[]` | 桌面由 Rust 读系统剪贴板（`arboard`）：文件列表按路径导入，图片编码成 PNG 再导入；Android 返回 `paste_media_unsupported`，提示改用附件按钮 |
 | `media_import_paths` | `paths[]` → `Asset[]` | 桌面原生拖放（`onDragDropEvent`）与文件对话框给出的路径；非媒体扩展名跳过 |
+| `asset_clean_unused` | → `CleanupReport{removed, freed}` | 手动诊断项：读全部正文得到引用集合（含回收站），遍历 `assets_dir` 删除未被引用的媒体文件与 `asset` 行（§3.1）。锁态返回 `locked` |
 | `share_drain` | → `ShareReport{id, dayKey, assets}` 或 `null` | 移动端分享收件箱：Kotlin `MainActivity` 把系统分享的文本/文件写进 `cache/share-inbox`，命令校验路径、导入资产并建条目（§6.6）。锁态返回 `locked`，收件箱保留待解锁重试 |
 | `data_export_dir` | `target_dir` → `ExportReport{dir, journals, assets}` | 桌面。同步等待完成；在 `target_dir` 下新建 `Diary2Day-<ts>/`，人可读 md + `assets/`（PRD §5.2、§6.4）。Android 走 `data_export_android`（§3.2） |
 | `data_backup` | `target, password?` → `BackupReport{path, size}` | 桌面。`VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip；带口令时再加密成 `.ddbak`（§6.5）。Android 走 `data_backup_android` |
@@ -221,7 +222,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 **缩略图**：导入命令（§3）对图片产出长边 ≤512px 的 `.webp`，文件名取原 name 的 stem（`k3f9a1.png` → `.thumbs/k3f9a1.webp`），卡片请求 `assetUrl("t", …)`；缩略图加载失败回落到原图，再失败显示占位图标。详情加载原图；音视频出图标 + 时长的卡片。
 
-**未使用附件**：是否被使用只由文档内容判定——退出编辑器时撤销栈随之重置，删掉引用的文件已无法恢复，因此就在这一刻清理。`DetailView` 记两份名字：载入正文时的 `referencedAssetNames` 与本次导入新增的 name；切换条目前与组件卸载前先冲刷保存，再用「载入 ∪ 新增 − 最终正文引用」得到待删名单，`asset_gc` 以 fire-and-forget 调用，失败只进控制台，不阻塞导航。`TodayCard` 的待发附件在点删除或卡片卸载时走同一条命令；已提交的附件不参与。不做全库引用扫描、不维护引用计数：回收站里的条目不会进入编辑会话，其附件自然不会被列入候选。Rust 侧只校验文件名合法（防路径穿越）并删除原图、缩略图与 `asset` 行；缩略图被同 stem 的其它附件共用时保留。
+**未使用附件**：是否被使用只由文档内容判定——退出编辑器时撤销栈随之重置，删掉引用的文件已无法恢复，因此就在这一刻清理。`DetailView` 记两份名字：载入正文时的 `referencedAssetNames` 与本次导入新增的 name；切换条目前与组件卸载前先冲刷保存，再用「载入 ∪ 新增 − 最终正文引用」得到待删名单，`asset_gc` 以 fire-and-forget 调用，失败只进控制台，不阻塞导航。`TodayCard` 的待发附件在点删除或卡片卸载时走同一条命令；已提交的附件不参与。日常流程不做全库引用扫描、不维护引用计数：回收站里的条目不会进入编辑会话，其附件自然不会被列入候选。**永久删除另算**：`journal_purge` / `journal_empty_trash` 先读出待删条目的正文，删行后对正文里出现的每个附件名做一次 `instr` 存在性查询，确认没有剩余条目引用后再删原图、缩略图与 `asset` 行；软删除只改 `deleted_at`，文件原样保留，恢复后引用仍有效。**手动清理**：`asset_clean_unused` 只在用户点"清理未使用附件"时执行——读一遍全部正文（含回收站）得到引用集合，再遍历 `assets_dir` 删掉未被引用的媒体文件与原图/缩略图/`asset` 行，回报删除个数与释放字节；不自动化，避免删除动作顺手清掉与当前操作无关的文件。Rust 侧只校验文件名合法（防路径穿越）并删除原图、缩略图与 `asset` 行；缩略图被同 stem 的其它附件共用时保留。
 
 **卡片用哪张图**：`asset` 与 `journal` 保持零关联（PRD §2.4）。卡片取 `journal.asset_n` / `audio_n` / `video_n` 三个分类计数与 `journal.cover_asset`，在 save 事务里和 `words`、派生 title 一起从正文按 `ddasset://{kind}/` 前缀扫出；正文变了它们就跟着变，没有额外的全表重建命令。
 
@@ -435,7 +436,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | TanStack Query | `useCollection()`（20 行）+ `dd://data-changed` 事件驱动失效 | 视图数超过 8 个或出现跨页缓存共享 |
 | Tailwind/UnoCSS、VueUse、`vue-i18n`、`dayjs`/`date-fns`、日历与图标字体、连接池以外的 UI 库 | UI.md 的 token + 手写月历 + `@mdi/js` 常量 + `Intl` + 100 行 `t()` | token 体系撑不住多主题时；语言数超过 4 种时 |
 | 图片压缩、转码、EXIF 清理、视频首帧图 | §3.1 那张缩略图是唯一加工 | 用户真实反馈原图过大时，且届时要给导出留"存原图"开关 |
-| 附件与日记的关联表、引用计数、媒体库、"清理未使用文件"按钮 | 正文里的 URL + 两个派生列；退出编辑时按文档内容差集调用 `asset_gc`，后台删除未引用文件（§3.1） | 附件量级大到必须整理时（PRD §2.4 的只读画廊视图） |
+| 附件与日记的关联表、引用计数、媒体库 | 正文里的 URL + 两个派生列；日常退出编辑时按文档内容差集调用 `asset_gc`；另有一个手动触发的"清理未使用附件"，按下时做一次全库引用扫描并删孤儿文件（§3.1），不做自动化 | 附件量级大到必须整理时（PRD §2.4 的只读画廊视图） |
 | 组件快照测试、覆盖率指标 | §10 那三类：天归属、往返等价、派生一致性；视觉走 UI.md §7 手工清单 | 有第二个 contributor 接手时 |
 | 向历史/未来日期补写、给旧日记改日期 | 写入只发生在当前日记日，旧日记只读（PRD §2.8） | 用户明确要求补记，且能给出不破坏时间线的交互时 |
 | 冲突三选框（本地/远端/合并） | `bad_revision` 一律"丢弃本次，以最后一次冲刷为准" | 出现多设备同步（PRD §4 已排除） |

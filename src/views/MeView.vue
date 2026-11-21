@@ -8,6 +8,7 @@ import {
   mdiCloudDownloadOutline,
   mdiCloudUploadOutline,
   mdiContentCopy,
+  mdiDeleteSweepOutline,
   mdiFileExportOutline,
   mdiFileImportOutline,
   mdiFolderOpenOutline,
@@ -15,6 +16,7 @@ import {
   mdiTrashCanOutline,
 } from "@mdi/js";
 import {
+  assetCleanUnused,
   backupPasswordGet,
   backupPasswordSet,
   dataBackup,
@@ -178,25 +180,29 @@ async function restoreEntry(id: string) {
 type PendingAction =
   | { kind: "purge"; id: string }
   | { kind: "empty" }
-  | { kind: "restore"; path: string };
+  | { kind: "restore"; path: string }
+  | { kind: "cleanup" };
 
 const pending = ref<PendingAction | null>(null);
 
 const confirmTitle = computed(() => {
   if (pending.value?.kind === "empty") return t("me.emptyTrashTitle");
   if (pending.value?.kind === "restore") return t("me.restore");
+  if (pending.value?.kind === "cleanup") return t("me.cleanAssets");
   return t("me.purgeTitle");
 });
 
 const confirmMessage = computed(() => {
   if (pending.value?.kind === "empty") return t("me.emptyTrashConfirm");
   if (pending.value?.kind === "restore") return t("me.restoreConfirm");
+  if (pending.value?.kind === "cleanup") return t("me.cleanAssetsConfirm");
   return t("me.purgeConfirm");
 });
 
 const confirmLabel = computed(() => {
   if (pending.value?.kind === "empty") return t("me.emptyTrash");
   if (pending.value?.kind === "restore") return t("me.restore");
+  if (pending.value?.kind === "cleanup") return t("me.cleanAssets");
   return t("common.purge");
 });
 
@@ -490,10 +496,23 @@ async function runPending() {
     });
     return;
   }
+  if (action.kind === "cleanup") {
+    await runOp(t("me.cleanAssets"), async () => {
+      const report = await assetCleanUnused();
+      notice.value = report.removed
+        ? t("me.cleanAssetsDone", {
+            n: report.removed,
+            size: formatBytes(report.freed),
+          })
+        : t("me.cleanAssetsNone");
+      await loadInfo();
+    });
+    return;
+  }
   opError.value = null;
   try {
     if (action.kind === "empty") await journalEmptyTrash();
-    else await journalPurge(action.id);
+    else if (action.kind === "purge") await journalPurge(action.id);
     await Promise.all([loadInfo(), loadTrash()]);
   } catch (err) {
     opError.value = describeError(err);
@@ -604,6 +623,18 @@ onBeforeUnmount(() => {
               <span class="label">{{ t("me.restore") }}</span>
             </span>
             <Icon :path="mdiCloudDownloadOutline" :size="20" />
+          </button>
+          <button
+            class="row action-row"
+            type="button"
+            :disabled="opBusy"
+            @click="pending = { kind: 'cleanup' }"
+          >
+            <span class="action-main">
+              <span class="label">{{ t("me.cleanAssets") }}</span>
+              <span class="sub">{{ t("me.cleanAssetsHint") }}</span>
+            </span>
+            <Icon :path="mdiDeleteSweepOutline" :size="20" />
           </button>
           <div v-if="opBusy" class="row">
             <span class="label">{{ opLabel }}</span>
