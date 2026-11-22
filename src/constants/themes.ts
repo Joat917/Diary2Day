@@ -1,6 +1,8 @@
 import type { MessageKey } from "../i18n";
 import type { CustomTheme, Settings, Theme, ThemeSlot } from "../ipc/types";
 
+export const MAX_THEME_FONTS = 3;
+
 export interface ThemePreview {
   surface: string;
   surface1: string;
@@ -225,7 +227,7 @@ export function seedCustomTheme(option: ThemeOption, id = newCustomThemeId()): C
     sampleTitle: null,
     sampleText: null,
     background: null,
-    font: null,
+    fonts: [],
   };
 }
 
@@ -243,7 +245,7 @@ export function cloneCustomTheme(source: CustomTheme, id = newCustomThemeId()): 
     sampleTitle: source.sampleTitle,
     sampleText: source.sampleText,
     background: source.background,
-    font: source.font ? { ...source.font } : null,
+    fonts: source.fonts.map((font) => ({ ...font })),
   };
 }
 

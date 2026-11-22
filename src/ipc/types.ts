@@ -30,7 +30,7 @@ export interface CustomTheme {
   sampleTitle: string | null;
   sampleText: string | null;
   background: string | null;
-  font: UiFont | null;
+  fonts: UiFont[];
 }
 
 export interface UiFont {

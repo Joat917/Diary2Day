@@ -37,8 +37,10 @@ pub struct CustomTheme {
     pub sample_title: Option<String>,
     pub sample_text: Option<String>,
     pub background: Option<String>,
-    pub font: Option<UiFont>,
+    pub fonts: Vec<UiFont>,
 }
+
+const MAX_THEME_FONTS: usize = 3;
 
 // 旧数据只有浅/深 base：缺四项文字色时按它补预设种子，读入后 base 不再存在。
 #[derive(Deserialize)]
@@ -57,7 +59,9 @@ struct CustomThemeWire {
     sample_title: Option<String>,
     sample_text: Option<String>,
     background: Option<String>,
+    // 上一版每只主题只有一个 `font` 对象：缺 `fonts` 时按一项读入。
     font: Option<UiFont>,
+    fonts: Vec<UiFont>,
 }
 
 impl Default for CustomThemeWire {
@@ -77,6 +81,7 @@ impl Default for CustomThemeWire {
             sample_text: None,
             background: None,
             font: None,
+            fonts: Vec::new(),
         }
     }
 }
@@ -126,7 +131,11 @@ impl<'de> Deserialize<'de> for CustomTheme {
             sample_title: wire.sample_title,
             sample_text: wire.sample_text,
             background: wire.background,
-            font: wire.font,
+            fonts: if wire.fonts.is_empty() {
+                wire.font.into_iter().collect()
+            } else {
+                wire.fonts
+            },
         })
     }
 }
@@ -162,7 +171,7 @@ impl Default for CustomTheme {
             sample_title: None,
             sample_text: None,
             background: None,
-            font: None,
+            fonts: Vec::new(),
         }
     }
 }
@@ -259,10 +268,11 @@ fn read_legacy_theme(conn: &Connection) -> Option<CustomTheme> {
     let value = read_value(conn, "customTheme").ok().flatten()?;
     let mut theme: CustomTheme = serde_json::from_value(value).ok()?;
     theme.id = LEGACY_THEME_ID.into();
-    theme.font = read_value(conn, "uiFont")
+    let font: Option<UiFont> = read_value(conn, "uiFont")
         .ok()
         .flatten()
         .and_then(|value| serde_json::from_value(value).ok());
+    theme.fonts = font.into_iter().collect();
     Some(theme)
 }
 
@@ -415,8 +425,19 @@ fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
                 .with_detail(background.clone()));
         }
     }
-    if let Some(font) = &theme.font {
+    if theme.fonts.len() > MAX_THEME_FONTS {
+        return Err(AppError::new("bad_setting", "自定义主题字体过多")
+            .with_detail(format!("{} 个（上限 {MAX_THEME_FONTS}）", theme.fonts.len())));
+    }
+    for (index, font) in theme.fonts.iter().enumerate() {
         validate_font(font)?;
+        if theme.fonts[..index]
+            .iter()
+            .any(|other| other.name == font.name)
+        {
+            return Err(AppError::new("bad_setting", "自定义主题字体重复")
+                .with_detail(font.name.clone()));
+        }
     }
     Ok(())
 }
@@ -530,10 +551,17 @@ mod tests {
         }
     }
 
-    fn with_font(font: UiFont) -> Settings {
+    fn with_fonts(fonts: Vec<UiFont>) -> Settings {
         let mut settings = with_custom("#F6F7F6", 100);
-        settings.custom_themes[0].font = Some(font);
+        settings.custom_themes[0].fonts = fonts;
         settings
+    }
+
+    fn font(name: &str, label: &str) -> UiFont {
+        UiFont {
+            name: name.into(),
+            label: label.into(),
+        }
     }
 
     fn test_db() -> Connection {
@@ -735,10 +763,10 @@ mod tests {
     #[test]
     fn validates_font_per_theme() {
         assert!(
-            validate(&with_font(UiFont {
-                name: "f3c9a1.woff2".into(),
-                label: "霞鹜文楷".into(),
-            }))
+            validate(&with_fonts(vec![
+                font("f3c9a1.woff2", "霞鹜文楷"),
+                font("b7d20c.ttf", "Inter"),
+            ]))
             .is_ok()
         );
 
@@ -749,14 +777,52 @@ mod tests {
             ("f3c9a1.ttf", long_label.as_str()),
         ] {
             assert!(
-                validate(&with_font(UiFont {
-                    name: name.into(),
-                    label: label.into(),
-                }))
-                .is_err(),
+                validate(&with_fonts(vec![font(name, label)])).is_err(),
                 "font should be rejected: {name}"
             );
         }
+
+        let too_many = (0..4)
+            .map(|index| font(&format!("f{index}.ttf"), "字体"))
+            .collect();
+        assert!(validate(&with_fonts(too_many)).is_err());
+
+        assert!(
+            validate(&with_fonts(vec![
+                font("f3c9a1.ttf", "楷体"),
+                font("f3c9a1.ttf", "重复"),
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn migrates_single_font_to_list() {
+        let conn = test_db();
+        insert_setting(&conn, "theme", json!("custom"));
+        insert_setting(
+            &conn,
+            "customThemes",
+            json!([{
+                "id": "theme-2",
+                "surface": { "color": "#101211", "alpha": 100 },
+                "card": { "color": "#181A19", "alpha": 100 },
+                "inset": { "color": "#0C0D0D", "alpha": 100 },
+                "scrim": { "color": "#000000", "alpha": 60 },
+                "font": { "name": "f3c9a1.ttf", "label": "霞鹜文楷" }
+            }]),
+        );
+
+        let settings = get_all(&conn).expect("read settings");
+        assert_eq!(settings.custom_themes[0].fonts.len(), 1);
+        assert_eq!(settings.custom_themes[0].fonts[0].label, "霞鹜文楷");
+
+        let stored = serde_json::to_value(&settings.custom_themes[0]).expect("serialize theme");
+        assert!(stored.get("font").is_none());
+        assert_eq!(
+            stored.get("fonts"),
+            Some(&json!([{ "name": "f3c9a1.ttf", "label": "霞鹜文楷" }]))
+        );
     }
 
     #[test]
@@ -857,13 +923,8 @@ mod tests {
         assert_eq!(migrated.custom_themes[0].primary, "#5FC9B4");
         assert_eq!(migrated.custom_themes[0].hairline.color, "#2A2F2D");
         assert_eq!(migrated.custom_themes[0].hairline.alpha, 100);
-        assert_eq!(
-            migrated.custom_themes[0]
-                .font
-                .as_ref()
-                .map(|font| font.label.as_str()),
-            Some("霞鹜文楷")
-        );
+        assert_eq!(migrated.custom_themes[0].fonts.len(), 1);
+        assert_eq!(migrated.custom_themes[0].fonts[0].label, "霞鹜文楷");
         assert_eq!(migrated.custom_theme_id.as_deref(), Some("legacy-theme-1"));
 
         let mut conn = conn;

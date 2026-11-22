@@ -533,11 +533,11 @@ async function exportImage() {
     });
     await prepareExportImages(article, session.settings.exportWidth);
     await inlineImages(article);
-    const activeFont =
+    const activeFonts =
       session.settings.theme === "custom"
-        ? activeCustomTheme(session.settings)?.font
-        : null;
-    const fontCss = activeFont ? await embedFontCss(card) : undefined;
+        ? (activeCustomTheme(session.settings)?.fonts ?? [])
+        : [];
+    const fontCss = activeFonts.length ? await embedFontCss(card) : undefined;
     const chunks = splitExportChunks(card, stage, (index, total) =>
       `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,
     );

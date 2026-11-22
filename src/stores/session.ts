@@ -104,17 +104,18 @@ export const useSession = defineStore("session", () => {
     }
   }
 
-  function applyFont(font: UiFont | null) {
+  // 每个文件一个家族，按顺序拼进字体栈：前面的字体缺哪个字，浏览器就往后找。
+  function applyFont(fonts: UiFont[]) {
     const root = document.documentElement;
     let element = document.getElementById(FONT_STYLE_ID) as HTMLStyleElement | null;
-    if (!font) {
+    if (fonts.length === 0) {
       element?.remove();
       root.style.removeProperty("--font-body");
       return;
     }
     // 资产目录尚未就绪时先跳过，setAssetBase 之后会再跑一次 applyTheme。
-    const url = fontFileUrl(font.name);
-    if (!url) return;
+    const urls = fonts.map((font) => fontFileUrl(font.name));
+    if (urls.some((url) => !url)) return;
     if (baseFontBody === null) {
       baseFontBody =
         getComputedStyle(root).getPropertyValue("--font-body").trim() ||
@@ -125,10 +126,18 @@ export const useSession = defineStore("session", () => {
       element.id = FONT_STYLE_ID;
       document.head.append(element);
     }
-    element.textContent = `@font-face{font-family:"DD-UI";src:url("${url}");font-display:swap;}`;
-    root.style.setProperty("--font-body", `"DD-UI", ${baseFontBody}`);
-    document.fonts.load('1em "DD-UI"').catch((error: unknown) => {
-      console.error("[font] custom UI font failed to load", url, error);
+    element.textContent = urls
+      .map(
+        (url, index) =>
+          `@font-face{font-family:"DD-UI-${index + 1}";src:url("${url}");font-display:swap;}`,
+      )
+      .join("");
+    const families = fonts.map((_, index) => `"DD-UI-${index + 1}"`).join(", ");
+    root.style.setProperty("--font-body", `${families}, ${baseFontBody}`);
+    urls.forEach((url, index) => {
+      document.fonts.load(`1em "DD-UI-${index + 1}"`).catch((error: unknown) => {
+        console.error("[font] custom UI font failed to load", url, error);
+      });
     });
   }
 
@@ -144,7 +153,7 @@ export const useSession = defineStore("session", () => {
         : "light";
     document.documentElement.dataset.motion = current.reduceMotion ? "reduced" : "full";
     applyCustomVars(custom);
-    applyFont(custom?.font ?? null);
+    applyFont(custom?.fonts ?? []);
     setLocale(current.language);
   }
 

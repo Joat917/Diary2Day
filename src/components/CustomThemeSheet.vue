@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { mdiArrowLeft } from "@mdi/js";
+import { mdiArrowDown, mdiArrowLeft, mdiArrowUp } from "@mdi/js";
 import {
   describeError,
   fontImport,
@@ -10,7 +10,12 @@ import {
 } from "../ipc/client";
 import type { CustomTheme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
-import { cloneCustomTheme, LIGHT_THEMES, seedCustomTheme } from "../constants/themes";
+import {
+  cloneCustomTheme,
+  LIGHT_THEMES,
+  MAX_THEME_FONTS,
+  seedCustomTheme,
+} from "../constants/themes";
 import { themeBgUrl } from "../utils/assetUrl";
 import { useBackLayer } from "../composables/useBackLayer";
 import { useSession } from "../stores/session";
@@ -83,7 +88,8 @@ function backgroundShared(name: string): boolean {
 
 function fontShared(name: string): boolean {
   return session.settings.customThemes.some(
-    (theme) => theme.id !== draft.value.id && theme.font?.name === name,
+    (theme) =>
+      theme.id !== draft.value.id && theme.fonts.some((font) => font.name === name),
   );
 }
 
@@ -187,23 +193,36 @@ async function removeBackground() {
 }
 
 async function pickFont() {
-  if (busy.value) return;
+  if (busy.value || draft.value.fonts.length >= MAX_THEME_FONTS) return;
   busy.value = true;
   error.value = null;
-  const previous = draft.value.font;
   try {
     const imported = await fontImport();
     if (!imported) return;
-    draft.value.font = { name: imported.name, label: imported.label };
-    preview();
+    draft.value.fonts = [
+      ...draft.value.fonts,
+      { name: imported.name, label: imported.label },
+    ];
     await queuePatch(draft.value);
-    if (
-      previous &&
-      previous.name !== imported.name &&
-      !fontShared(previous.name)
-    ) {
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removeFont(index: number) {
+  if (busy.value) return;
+  const font = draft.value.fonts[index];
+  if (!font) return;
+  busy.value = true;
+  error.value = null;
+  draft.value.fonts = draft.value.fonts.filter((_, i) => i !== index);
+  try {
+    await queuePatch(draft.value);
+    if (!fontShared(font.name)) {
       try {
-        await fontRemove(previous.name);
+        await fontRemove(font.name);
       } catch (err) {
         error.value = describeError(err);
       }
@@ -215,28 +234,15 @@ async function pickFont() {
   }
 }
 
-async function resetFont() {
+function moveFont(index: number, delta: number) {
   if (busy.value) return;
-  const previous = draft.value.font;
-  if (!previous) return;
-  busy.value = true;
-  error.value = null;
-  draft.value.font = null;
-  preview();
-  try {
-    await queuePatch(draft.value);
-    if (!fontShared(previous.name)) {
-      try {
-        await fontRemove(previous.name);
-      } catch (err) {
-        error.value = describeError(err);
-      }
-    }
-  } catch (err) {
-    error.value = describeError(err);
-  } finally {
-    busy.value = false;
-  }
+  const next = index + delta;
+  const list = [...draft.value.fonts];
+  if (next < 0 || next >= list.length) return;
+  const [font] = list.splice(index, 1);
+  list.splice(next, 0, font);
+  draft.value.fonts = list;
+  void commitDraft();
 }
 
 function askDelete() {
@@ -455,29 +461,53 @@ onBeforeUnmount(() => {
           <div class="row font-row">
             <span class="row-label">{{ t("theme.font") }}</span>
             <span class="font-actions">
-              <span class="font-name">
-                {{ draft.font?.label ?? t("theme.fontDefault") }}
+              <span v-if="!draft.fonts.length" class="font-name">
+                {{ t("theme.fontDefault") }}
               </span>
-              <span class="font-buttons">
-                <button
-                  class="text-btn"
-                  type="button"
-                  :disabled="busy"
-                  @click="pickFont"
-                >
-                  {{ t("theme.fontPick") }}
-                </button>
-                <button
-                  v-if="draft.font"
-                  class="text-btn danger"
-                  type="button"
-                  :disabled="busy"
-                  @click="resetFont"
-                >
-                  {{ t("theme.fontReset") }}
-                </button>
-              </span>
+              <button
+                class="text-btn"
+                type="button"
+                :disabled="busy || draft.fonts.length >= MAX_THEME_FONTS"
+                @click="pickFont"
+              >
+                {{ t("theme.fontPick") }}
+              </button>
             </span>
+          </div>
+          <div
+            v-for="(font, index) in draft.fonts"
+            :key="font.name"
+            class="row font-item"
+          >
+            <span class="font-name font-item-name" :title="font.label">
+              {{ font.label }}
+            </span>
+            <button
+              class="text-btn"
+              type="button"
+              :disabled="busy || index === 0"
+              :aria-label="t('theme.fontUp')"
+              @click="moveFont(index, -1)"
+            >
+              <Icon :path="mdiArrowUp" :size="16" />
+            </button>
+            <button
+              class="text-btn"
+              type="button"
+              :disabled="busy || index === draft.fonts.length - 1"
+              :aria-label="t('theme.fontDown')"
+              @click="moveFont(index, 1)"
+            >
+              <Icon :path="mdiArrowDown" :size="16" />
+            </button>
+            <button
+              class="text-btn danger"
+              type="button"
+              :disabled="busy"
+              @click="removeFont(index)"
+            >
+              {{ t("theme.fontRemove") }}
+            </button>
           </div>
         </section>
 
@@ -752,9 +782,13 @@ onBeforeUnmount(() => {
   font-size: var(--t-small);
 }
 
-.font-buttons {
-  display: flex;
-  gap: var(--s-3);
+.font-item {
+  gap: var(--s-1);
+}
+
+.font-item-name {
+  flex: 1;
+  min-width: 0;
 }
 
 .text-btn {

@@ -177,7 +177,7 @@ async function deleteTheme(id: string) {
   if (!removed) return;
   const remaining = current.customThemes.filter((theme) => theme.id !== id);
   const background = removed.background;
-  const fontName = removed.font?.name;
+  const fontNames = removed.fonts.map((font) => font.name);
   const patch: Partial<Settings> = { customThemes: remaining };
   if (current.customThemeId === id) {
     if (remaining.length > 0) patch.customThemeId = remaining[0].id;
@@ -201,7 +201,10 @@ async function deleteTheme(id: string) {
       customError.value = describeError(err);
     }
   }
-  if (fontName && !remaining.some((theme) => theme.font?.name === fontName)) {
+  for (const fontName of fontNames) {
+    if (remaining.some((theme) => theme.fonts.some((font) => font.name === fontName))) {
+      continue;
+    }
     try {
       await fontRemove(fontName);
     } catch (err) {
