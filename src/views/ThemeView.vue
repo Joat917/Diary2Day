@@ -3,16 +3,19 @@ import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { mdiArrowLeft, mdiPencil } from "@mdi/js";
 import {
-  customBaseOption,
+  activeCustomTheme,
+  cloneCustomTheme,
+  customScheme,
   DARK_THEMES,
   LIGHT_THEMES,
+  onPrimaryColor,
   seedCustomTheme,
   slotRgba,
   themeOption,
   type ThemeOption,
 } from "../constants/themes";
-import type { CustomTheme, Theme } from "../ipc/types";
-import { describeError } from "../ipc/client";
+import type { CustomTheme, Settings, Theme } from "../ipc/types";
+import { describeError, fontRemove, themeBgRemove } from "../ipc/client";
 import { t } from "../i18n";
 import { useSession } from "../stores/session";
 import { themeBgUrl } from "../utils/assetUrl";
@@ -22,76 +25,127 @@ import CustomThemeSheet from "../components/CustomThemeSheet.vue";
 const router = useRouter();
 const session = useSession();
 
-const sheetOpen = ref(false);
+const editingId = ref<string | null>(null);
 const customError = ref<string | null>(null);
 
+const customThemes = computed(() => session.settings.customThemes);
 const customActive = computed(() => session.settings.theme === "custom");
-const custom = computed<CustomTheme>(
-  () =>
-    session.settings.customTheme ??
-    seedCustomTheme(themeOption(session.settings.theme)),
-);
-const customBase = computed(() => customBaseOption(custom.value.base).preview);
-const customBackground = computed(() => themeBgUrl(custom.value.background));
 
-function previewStyle(): Record<string, string> {
+function isCustomActive(theme: CustomTheme): boolean {
+  return customActive.value && session.settings.customThemeId === theme.id;
+}
+
+function previewStyle(theme: CustomTheme): Record<string, string> {
+  const background = themeBgUrl(theme.background);
+  return { "--c-theme-bg": background ? `url("${background}")` : "none" };
+}
+
+function surfaceStyle(theme: CustomTheme): Record<string, string> {
+  return { background: slotRgba(theme.surface) };
+}
+
+function customCardStyle(theme: CustomTheme) {
+  const active = isCustomActive(theme);
   return {
-    "--c-theme-bg": customBackground.value
-      ? `url("${customBackground.value}")`
-      : "none",
+    background: slotRgba(theme.card),
+    borderColor: active ? theme.primary : theme.hairline,
+    boxShadow: active ? `0 0 0 1px ${theme.primary}` : "none",
   };
 }
 
-function surfaceStyle(): Record<string, string> {
-  return { background: slotRgba(custom.value.surface) };
+function customChipStyle(theme: CustomTheme) {
+  return isCustomActive(theme)
+    ? { background: theme.primary, color: onPrimaryColor(theme.primary) }
+    : { background: slotRgba(theme.inset), color: theme.primary };
 }
 
-function customCardStyle(): Record<string, string> {
-  const base = customBase.value;
-  return {
-    background: slotRgba(custom.value.card),
-    borderColor: customActive.value ? base.primary : base.hairline,
-    boxShadow: customActive.value ? `0 0 0 1px ${base.primary}` : "none",
-  };
-}
-
-function customChipStyle(): Record<string, string> {
-  const base = customBase.value;
-  return customActive.value
-    ? { background: base.primary, color: base.onPrimary }
-    : { background: slotRgba(custom.value.inset), color: base.primary };
-}
-
-async function pickCustom() {
-  if (customActive.value) return;
+async function createTheme() {
   customError.value = null;
+  const settings = session.settings;
+  const current = activeCustomTheme(settings);
+  const next =
+    settings.theme === "custom"
+      ? current
+        ? cloneCustomTheme(current)
+        : seedCustomTheme(LIGHT_THEMES[0])
+      : seedCustomTheme(themeOption(settings.theme));
   try {
-    const next =
-      session.settings.customTheme ??
-      seedCustomTheme(themeOption(session.settings.theme));
-    await session.patch({ theme: "custom", customTheme: next });
+    await session.patch({
+      theme: "custom",
+      customThemeId: next.id,
+      customThemes: [...settings.customThemes, next],
+    });
+    editingId.value = next.id;
   } catch (err) {
     customError.value = describeError(err);
   }
 }
 
-async function openSheet() {
+async function pickCustom(theme: CustomTheme) {
+  if (isCustomActive(theme)) return;
   customError.value = null;
   try {
-    if (!customActive.value || !session.settings.customTheme) {
-      const next =
-        session.settings.customTheme ??
-        seedCustomTheme(themeOption(session.settings.theme));
-      await session.patch({ theme: "custom", customTheme: next });
+    await session.patch({ theme: "custom", customThemeId: theme.id });
+  } catch (err) {
+    customError.value = describeError(err);
+  }
+}
+
+async function openSheet(theme: CustomTheme) {
+  customError.value = null;
+  try {
+    if (!isCustomActive(theme)) {
+      await session.patch({ theme: "custom", customThemeId: theme.id });
     }
-    sheetOpen.value = true;
+    editingId.value = theme.id;
   } catch (err) {
     customError.value = describeError(err);
   }
 }
 
 function closeSheet() {
-  sheetOpen.value = false;
+  editingId.value = null;
+}
+
+async function deleteTheme(id: string) {
+  editingId.value = null;
+  customError.value = null;
+  const current = session.settings;
+  const removed = current.customThemes.find((theme) => theme.id === id);
+  if (!removed) return;
+  const remaining = current.customThemes.filter((theme) => theme.id !== id);
+  const background = removed.background;
+  const fontName = removed.font?.name;
+  const patch: Partial<Settings> = { customThemes: remaining };
+  if (current.customThemeId === id) {
+    if (remaining.length > 0) patch.customThemeId = remaining[0].id;
+    else {
+      patch.customThemeId = null;
+      if (current.theme === "custom") {
+        patch.theme = customScheme(removed) === "dark" ? "dark" : "light";
+      }
+    }
+  }
+  try {
+    await session.patch(patch);
+  } catch (err) {
+    customError.value = describeError(err);
+    return;
+  }
+  if (background && !remaining.some((theme) => theme.background === background)) {
+    try {
+      await themeBgRemove(background);
+    } catch (err) {
+      customError.value = describeError(err);
+    }
+  }
+  if (fontName && !remaining.some((theme) => theme.font?.name === fontName)) {
+    try {
+      await fontRemove(fontName);
+    } catch (err) {
+      customError.value = describeError(err);
+    }
+  }
 }
 
 function isActive(theme: ThemeOption): boolean {
@@ -226,56 +280,66 @@ function goBack() {
       </section>
 
       <section class="group">
-        <h2 class="group-title">{{ t("theme.custom") }}</h2>
-        <div class="custom-row">
-          <button
-            class="theme-card custom-card"
-            type="button"
-            :aria-pressed="customActive"
-            :aria-label="t('theme.custom')"
-            @click="pickCustom"
+        <div class="group-head">
+          <h2 class="group-title">{{ t("theme.custom") }}</h2>
+          <button class="text-btn" type="button" @click="createTheme">
+            {{ t("theme.new") }}
+          </button>
+        </div>
+        <div v-if="customThemes.length" class="grid">
+          <div
+            v-for="(theme, index) in customThemes"
+            :key="theme.id"
+            class="custom-item"
           >
-            <span class="preview checker" :style="previewStyle()" aria-hidden="true">
-              <span class="pv-surface" :style="surfaceStyle()" />
-              <span class="pv-card" :style="customCardStyle()">
-                <span
-                  class="pv-title"
-                  :style="{ color: customBase.onSurface }"
-                >
-                  {{ t("theme.customSample.title") }}
-                </span>
-                <span
-                  class="pv-text"
-                  :style="{ color: customBase.onSurfaceMuted }"
-                >
-                  {{ t("theme.customSample.text") }}
-                </span>
-                <span class="pv-foot">
-                  <span class="pv-chip" :style="customChipStyle()">
-                    {{ t("theme.custom") }}
+            <button
+              class="theme-card"
+              type="button"
+              :aria-pressed="isCustomActive(theme)"
+              :aria-label="t('theme.customN', { n: index + 1 })"
+              @click="pickCustom(theme)"
+            >
+              <span class="preview checker" :style="previewStyle(theme)" aria-hidden="true">
+                <span class="pv-surface" :style="surfaceStyle(theme)" />
+                <span class="pv-card" :style="customCardStyle(theme)">
+                  <span class="pv-title" :style="{ color: theme.onSurface }">
+                    {{ t("theme.customSample.title") }}
                   </span>
-                  <span
-                    class="pv-btn"
-                    :style="{
-                      background: customBase.primary,
-                      color: customBase.onPrimary,
-                    }"
-                  >
-                    <Icon :path="mdiPencil" :size="10" />
+                  <span class="pv-text" :style="{ color: theme.onSurfaceMuted }">
+                    {{ t("theme.customSample.text") }}
+                  </span>
+                  <span class="pv-foot">
+                    <span class="pv-chip" :style="customChipStyle(theme)">
+                      {{ t("theme.customN", { n: index + 1 }) }}
+                    </span>
+                    <span
+                      class="pv-btn"
+                      :style="{
+                        background: theme.primary,
+                        color: onPrimaryColor(theme.primary),
+                      }"
+                    >
+                      <Icon :path="mdiPencil" :size="10" />
+                    </span>
                   </span>
                 </span>
               </span>
-            </span>
-          </button>
-          <button class="text-btn" type="button" @click="openSheet">
-            {{ t("theme.edit") }}
-          </button>
+            </button>
+            <button class="text-btn" type="button" @click="openSheet(theme)">
+              {{ t("theme.edit") }}
+            </button>
+          </div>
         </div>
         <p v-if="customError" class="error">{{ customError }}</p>
       </section>
     </div>
 
-    <CustomThemeSheet v-if="sheetOpen" @close="closeSheet" />
+    <CustomThemeSheet
+      v-if="editingId"
+      :theme-id="editingId"
+      @close="closeSheet"
+      @delete="deleteTheme"
+    />
   </div>
 </template>
 
@@ -342,6 +406,14 @@ function goBack() {
   margin-top: 0;
 }
 
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
 .group-title {
   font-size: var(--t-small);
   line-height: var(--t-small-lh);
@@ -349,6 +421,10 @@ function goBack() {
   font-weight: 500;
   letter-spacing: 0.04em;
   margin-bottom: var(--s-2);
+}
+
+.group-head .group-title {
+  margin-bottom: 0;
 }
 
 .grid {
@@ -364,6 +440,22 @@ function goBack() {
   background: none;
   border-radius: var(--r-md);
   text-align: start;
+}
+
+.custom-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.custom-item .theme-card {
+  width: 100%;
+}
+
+.custom-item .text-btn {
+  min-height: 32px;
 }
 
 .preview {
@@ -439,17 +531,6 @@ function goBack() {
   width: 18px;
   height: 18px;
   border-radius: var(--r-pill);
-  flex: none;
-}
-
-.custom-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-}
-
-.custom-card {
-  width: 180px;
   flex: none;
 }
 

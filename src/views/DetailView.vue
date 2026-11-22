@@ -25,6 +25,7 @@ import {
 } from "../ipc/client";
 import type { Journal, Tag } from "../ipc/types";
 import { t } from "../i18n";
+import { activeCustomTheme } from "../constants/themes";
 import { useBreakpoint } from "../composables/useBreakpoint";
 import { useAutosave } from "../composables/useAutosave";
 import { useSession } from "../stores/session";
@@ -532,7 +533,11 @@ async function exportImage() {
     });
     await prepareExportImages(article, session.settings.exportWidth);
     await inlineImages(article);
-    const fontCss = session.settings.uiFont ? await embedFontCss(card) : undefined;
+    const activeFont =
+      session.settings.theme === "custom"
+        ? activeCustomTheme(session.settings)?.font
+        : null;
+    const fontCss = activeFont ? await embedFontCss(card) : undefined;
     const chunks = splitExportChunks(card, stage, (index, total) =>
       `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,
     );

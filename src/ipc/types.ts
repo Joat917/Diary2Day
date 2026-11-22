@@ -11,7 +11,6 @@ export type Theme =
 export type DateFormat = "slash" | "short" | "zh";
 export type LocaleCode = "zh-CN" | "en";
 export type CardTime = "recorded" | "updated";
-export type ThemeBase = "light" | "dark";
 
 export interface ThemeSlot {
   color: string;
@@ -19,12 +18,17 @@ export interface ThemeSlot {
 }
 
 export interface CustomTheme {
-  base: ThemeBase;
+  id: string;
   surface: ThemeSlot;
   card: ThemeSlot;
   inset: ThemeSlot;
   scrim: ThemeSlot;
+  onSurface: string;
+  onSurfaceMuted: string;
+  primary: string;
+  hairline: string;
   background: string | null;
+  font: UiFont | null;
 }
 
 export interface UiFont {
@@ -57,8 +61,8 @@ export interface Settings {
   cardTime: CardTime;
   autoEdit: boolean;
   exportWidth: number;
-  customTheme: CustomTheme | null;
-  uiFont: UiFont | null;
+  customThemes: CustomTheme[];
+  customThemeId: string | null;
 }
 
 export interface Tag {

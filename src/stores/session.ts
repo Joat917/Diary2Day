@@ -1,8 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { settingsGetAll, settingsPatch } from "../ipc/client";
-import type { CustomTheme, Settings, Theme, ThemeSlot } from "../ipc/types";
-import { isDarkTheme, slotRgba } from "../constants/themes";
+import type { CustomTheme, Settings, Theme, ThemeSlot, UiFont } from "../ipc/types";
+import {
+  activeCustomTheme,
+  customScheme,
+  isDarkTheme,
+  onPrimaryColor,
+  slotRgba,
+} from "../constants/themes";
 import { fontFileUrl, themeBgUrl } from "../utils/assetUrl";
 import { setLocale } from "../i18n";
 
@@ -21,12 +27,19 @@ const defaults: Settings = {
   cardTime: "recorded",
   autoEdit: true,
   exportWidth: 640,
-  customTheme: null,
-  uiFont: null,
+  customThemes: [],
+  customThemeId: null,
 };
 
 const FONT_STYLE_ID = "dd-ui-font";
 const MODULE_VARS = ["--c-surface", "--c-surface-1", "--c-surface-2", "--c-scrim"] as const;
+const TEXT_VARS = [
+  "--c-on-surface",
+  "--c-on-surface-muted",
+  "--c-primary",
+  "--c-hairline",
+  "--c-on-primary",
+] as const;
 
 let baseFontBody: string | null = null;
 let probedBackground: string | null = null;
@@ -63,6 +76,7 @@ export const useSession = defineStore("session", () => {
         style.removeProperty(name);
         style.removeProperty(`${name}-flat`);
       }
+      for (const name of TEXT_VARS) style.removeProperty(name);
       style.removeProperty("--c-theme-bg");
       return;
     }
@@ -76,6 +90,11 @@ export const useSession = defineStore("session", () => {
       style.setProperty(name, slotRgba(slot));
       style.setProperty(`${name}-flat`, slot.color);
     }
+    style.setProperty("--c-on-surface", custom.onSurface);
+    style.setProperty("--c-on-surface-muted", custom.onSurfaceMuted);
+    style.setProperty("--c-primary", custom.primary);
+    style.setProperty("--c-hairline", custom.hairline);
+    style.setProperty("--c-on-primary", onPrimaryColor(custom.primary));
     const background = themeBgUrl(custom.background);
     if (background) {
       style.setProperty("--c-theme-bg", `url("${background}")`);
@@ -85,9 +104,8 @@ export const useSession = defineStore("session", () => {
     }
   }
 
-  function applyFont() {
+  function applyFont(font: UiFont | null) {
     const root = document.documentElement;
-    const font = settings.value.uiFont;
     let element = document.getElementById(FONT_STYLE_ID) as HTMLStyleElement | null;
     if (!font) {
       element?.remove();
@@ -117,23 +135,22 @@ export const useSession = defineStore("session", () => {
   function applyTheme() {
     const current = settings.value;
     const theme = current.theme;
-    const custom = theme === "custom" ? current.customTheme : null;
+    const custom = theme === "custom" ? activeCustomTheme(current) : null;
     document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.scheme =
-      theme === "custom"
-        ? (custom?.base ?? "light")
-        : isDarkTheme(theme)
-          ? "dark"
-          : "light";
+    document.documentElement.dataset.scheme = custom
+      ? customScheme(custom)
+      : isDarkTheme(theme)
+        ? "dark"
+        : "light";
     document.documentElement.dataset.motion = current.reduceMotion ? "reduced" : "full";
     applyCustomVars(custom);
-    applyFont();
+    applyFont(custom?.font ?? null);
     setLocale(current.language);
   }
 
   // 编辑层拖动中的临时外观：只改根节点，不写库；关闭编辑层后再 applyTheme() 回到已存值。
   function previewCustom(custom: CustomTheme) {
-    document.documentElement.dataset.scheme = custom.base;
+    document.documentElement.dataset.scheme = customScheme(custom);
     applyCustomVars(custom);
   }
 

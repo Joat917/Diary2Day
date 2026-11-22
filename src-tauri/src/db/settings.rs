@@ -1,8 +1,10 @@
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::error::AppError;
+
+const LEGACY_THEME_ID: &str = "legacy-theme-1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -20,21 +22,92 @@ impl Default for ThemeSlot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomTheme {
-    pub base: String,
+    pub id: String,
     pub surface: ThemeSlot,
     pub card: ThemeSlot,
     pub inset: ThemeSlot,
     pub scrim: ThemeSlot,
+    pub on_surface: String,
+    pub on_surface_muted: String,
+    pub primary: String,
+    pub hairline: String,
     pub background: Option<String>,
+    pub font: Option<UiFont>,
+}
+
+// 旧数据只有浅/深 base：缺四项文字色时按它补预设种子，读入后 base 不再存在。
+#[derive(Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct CustomThemeWire {
+    id: String,
+    base: Option<String>,
+    surface: ThemeSlot,
+    card: ThemeSlot,
+    inset: ThemeSlot,
+    scrim: ThemeSlot,
+    on_surface: Option<String>,
+    on_surface_muted: Option<String>,
+    primary: Option<String>,
+    hairline: Option<String>,
+    background: Option<String>,
+    font: Option<UiFont>,
+}
+
+impl Default for CustomThemeWire {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            base: None,
+            surface: ThemeSlot::default(),
+            card: ThemeSlot::default(),
+            inset: ThemeSlot::default(),
+            scrim: ThemeSlot::default(),
+            on_surface: None,
+            on_surface_muted: None,
+            primary: None,
+            hairline: None,
+            background: None,
+            font: None,
+        }
+    }
+}
+
+fn seed_text_colors(dark: bool) -> (&'static str, &'static str, &'static str, &'static str) {
+    if dark {
+        ("#ECEEED", "#9BA29F", "#5FC9B4", "#2A2F2D")
+    } else {
+        ("#17181A", "#5F6467", "#17695C", "#E4E7E6")
+    }
+}
+
+impl<'de> Deserialize<'de> for CustomTheme {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = CustomThemeWire::deserialize(deserializer)?;
+        let (text, muted, primary, hairline) = seed_text_colors(wire.base.as_deref() == Some("dark"));
+        Ok(Self {
+            id: wire.id,
+            surface: wire.surface,
+            card: wire.card,
+            inset: wire.inset,
+            scrim: wire.scrim,
+            on_surface: wire.on_surface.unwrap_or_else(|| text.into()),
+            on_surface_muted: wire.on_surface_muted.unwrap_or_else(|| muted.into()),
+            primary: wire.primary.unwrap_or_else(|| primary.into()),
+            hairline: wire.hairline.unwrap_or_else(|| hairline.into()),
+            background: wire.background,
+            font: wire.font,
+        })
+    }
 }
 
 impl Default for CustomTheme {
     fn default() -> Self {
+        let (on_surface, on_surface_muted, primary, hairline) = seed_text_colors(false);
         Self {
-            base: "light".into(),
+            id: String::new(),
             surface: ThemeSlot {
                 color: "#F6F7F6".into(),
                 alpha: 100,
@@ -51,7 +124,12 @@ impl Default for CustomTheme {
                 color: "#111312".into(),
                 alpha: 45,
             },
+            on_surface: on_surface.into(),
+            on_surface_muted: on_surface_muted.into(),
+            primary: primary.into(),
+            hairline: hairline.into(),
             background: None,
+            font: None,
         }
     }
 }
@@ -80,8 +158,8 @@ pub struct Settings {
     pub card_time: String,
     pub auto_edit: bool,
     pub export_width: u32,
-    pub custom_theme: Option<CustomTheme>,
-    pub ui_font: Option<UiFont>,
+    pub custom_themes: Vec<CustomTheme>,
+    pub custom_theme_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -102,8 +180,8 @@ impl Default for Settings {
             card_time: "recorded".into(),
             auto_edit: true,
             export_width: 640,
-            custom_theme: None,
-            ui_font: None,
+            custom_themes: Vec::new(),
+            custom_theme_id: None,
         }
     }
 }
@@ -123,8 +201,8 @@ const KEYS: &[&str] = &[
     "cardTime",
     "autoEdit",
     "exportWidth",
-    "customTheme",
-    "uiFont",
+    "customThemes",
+    "customThemeId",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -144,10 +222,34 @@ fn read_field<T: DeserializeOwned>(conn: &Connection, key: &str, fallback: T) ->
         .unwrap_or(fallback)
 }
 
+fn read_legacy_theme(conn: &Connection) -> Option<CustomTheme> {
+    let value = read_value(conn, "customTheme").ok().flatten()?;
+    let mut theme: CustomTheme = serde_json::from_value(value).ok()?;
+    theme.id = LEGACY_THEME_ID.into();
+    theme.font = read_value(conn, "uiFont")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok());
+    Some(theme)
+}
+
 pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
     let default = Settings::default();
+    let theme = read_field(conn, "theme", default.theme);
+    let mut custom_themes: Vec<CustomTheme> =
+        read_field(conn, "customThemes", default.custom_themes);
+    if custom_themes.is_empty() {
+        if let Some(legacy) = read_legacy_theme(conn) {
+            custom_themes.push(legacy);
+        }
+    }
+    let mut custom_theme_id: Option<String> =
+        read_field(conn, "customThemeId", default.custom_theme_id);
+    if custom_theme_id.is_none() && theme == "custom" {
+        custom_theme_id = custom_themes.first().map(|custom| custom.id.clone());
+    }
     Ok(Settings {
-        theme: read_field(conn, "theme", default.theme),
+        theme,
         language: read_field(conn, "language", default.language),
         date_format: read_field(conn, "dateFormat", default.date_format),
         week_start: read_field(conn, "weekStart", default.week_start),
@@ -165,8 +267,8 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
         card_time: read_field(conn, "cardTime", default.card_time),
         auto_edit: read_field(conn, "autoEdit", default.auto_edit),
         export_width: read_field(conn, "exportWidth", default.export_width),
-        custom_theme: read_field(conn, "customTheme", default.custom_theme),
-        ui_font: read_field(conn, "uiFont", default.ui_font),
+        custom_themes,
+        custom_theme_id,
     })
 }
 
@@ -204,9 +306,38 @@ pub(crate) fn is_safe_font_name(name: &str) -> bool {
         .is_some_and(|(_, ext)| matches!(ext, "ttf" | "otf" | "woff" | "woff2"))
 }
 
+fn safe_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn validate_font(font: &UiFont) -> Result<(), AppError> {
+    if !is_safe_font_name(&font.name) {
+        return Err(AppError::new("bad_setting", "字体文件名不合法").with_detail(font.name.clone()));
+    }
+    if font.label.trim().chars().count() > 40 {
+        return Err(AppError::new("bad_setting", "字体名称过长"));
+    }
+    Ok(())
+}
+
 fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
-    if !matches!(theme.base.as_str(), "light" | "dark") {
-        return Err(AppError::new("bad_setting", "自定义主题基色不合法"));
+    if !safe_id(&theme.id) {
+        return Err(AppError::new("bad_setting", "自定义主题 id 不合法")
+            .with_detail(theme.id.clone()));
+    }
+    for (name, color) in [
+        ("onSurface", &theme.on_surface),
+        ("onSurfaceMuted", &theme.on_surface_muted),
+        ("primary", &theme.primary),
+        ("hairline", &theme.hairline),
+    ] {
+        if !hex_color_ok(color) {
+            return Err(AppError::new("bad_setting", "自定义主题文字颜色不合法")
+                .with_detail(format!("{name}: {color}")));
+        }
     }
     let slots = [
         ("surface", &theme.surface),
@@ -230,6 +361,9 @@ fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
                 .with_detail(background.clone()));
         }
     }
+    if let Some(font) = &theme.font {
+        validate_font(font)?;
+    }
     Ok(())
 }
 
@@ -241,19 +375,23 @@ fn validate(settings: &Settings) -> Result<(), AppError> {
     ) {
         return Err(AppError::new("bad_setting", "未知主题"));
     }
-    if let Some(custom) = &settings.custom_theme {
+    for (index, custom) in settings.custom_themes.iter().enumerate() {
         validate_custom_theme(custom)?;
-    }
-    if settings.theme == "custom" && settings.custom_theme.is_none() {
-        return Err(AppError::new("bad_setting", "自定义主题缺少配色"));
-    }
-    if let Some(font) = &settings.ui_font {
-        if !is_safe_font_name(&font.name) {
-            return Err(AppError::new("bad_setting", "字体文件名不合法")
-                .with_detail(font.name.clone()));
+        if settings.custom_themes[..index]
+            .iter()
+            .any(|other| other.id == custom.id)
+        {
+            return Err(AppError::new("bad_setting", "自定义主题 id 重复")
+                .with_detail(custom.id.clone()));
         }
-        if font.label.trim().chars().count() > 40 {
-            return Err(AppError::new("bad_setting", "字体名称过长"));
+    }
+    if settings.theme == "custom" {
+        let id = settings
+            .custom_theme_id
+            .as_deref()
+            .ok_or_else(|| AppError::new("bad_setting", "自定义主题缺少当前项"))?;
+        if !settings.custom_themes.iter().any(|custom| custom.id == id) {
+            return Err(AppError::new("bad_setting", "当前自定义主题不存在").with_detail(id));
         }
     }
     if !matches!(settings.language.as_str(), "zh-CN" | "en") {
@@ -311,27 +449,54 @@ pub fn patch(conn: &mut Connection, patch: Value) -> Result<Settings, AppError> 
             write_value(&tx, key, value)?;
         }
     }
+    tx.execute("DELETE FROM settings WHERE key IN ('customTheme', 'uiFont')", [])?;
     tx.commit()?;
     Ok(next)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{validate, CustomTheme, Settings, ThemeSlot, UiFont};
+    use super::{CustomTheme, Settings, ThemeSlot, UiFont, get_all, patch, validate};
+    use rusqlite::{Connection, params};
+    use serde_json::json;
 
-    fn with_custom(base: &str, surface: &str, alpha: u8) -> Settings {
+    fn with_custom(surface: &str, alpha: u8) -> Settings {
         Settings {
             theme: "custom".into(),
-            custom_theme: Some(CustomTheme {
-                base: base.into(),
+            custom_themes: vec![CustomTheme {
+                id: "theme-1".into(),
                 surface: ThemeSlot {
                     color: surface.into(),
                     alpha,
                 },
                 ..CustomTheme::default()
-            }),
+            }],
+            custom_theme_id: Some("theme-1".into()),
             ..Settings::default()
         }
+    }
+
+    fn with_font(font: UiFont) -> Settings {
+        let mut settings = with_custom("#F6F7F6", 100);
+        settings.custom_themes[0].font = Some(font);
+        settings
+    }
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        )
+        .expect("create settings table");
+        conn
+    }
+
+    fn insert_setting(conn: &Connection, key: &str, value: serde_json::Value) {
+        conn.execute(
+            "INSERT INTO settings(key, value, updated_at) VALUES(?1, ?2, ?3)",
+            params![key, value.to_string(), "2026-01-01T00:00:00Z"],
+        )
+        .expect("insert setting");
     }
 
     #[test]
@@ -340,86 +505,205 @@ mod tests {
     }
 
     #[test]
-    fn custom_theme_needs_palette() {
+    fn custom_theme_needs_an_existing_active_item() {
         let missing = Settings {
             theme: "custom".into(),
             ..Settings::default()
         };
         assert!(validate(&missing).is_err());
-        assert!(validate(&with_custom("light", "#F6F7F6", 100)).is_ok());
+
+        let no_id = Settings {
+            theme: "custom".into(),
+            custom_themes: vec![CustomTheme {
+                id: "theme-1".into(),
+                ..CustomTheme::default()
+            }],
+            custom_theme_id: None,
+            ..Settings::default()
+        };
+        assert!(validate(&no_id).is_err());
+
+        let dangling = Settings {
+            theme: "custom".into(),
+            custom_themes: vec![CustomTheme {
+                id: "theme-1".into(),
+                ..CustomTheme::default()
+            }],
+            custom_theme_id: Some("theme-2".into()),
+            ..Settings::default()
+        };
+        assert!(validate(&dangling).is_err());
+
+        assert!(validate(&with_custom("#F6F7F6", 100)).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_and_bad_theme_ids() {
+        let mut duplicate = with_custom("#F6F7F6", 100);
+        duplicate
+            .custom_themes
+            .push(duplicate.custom_themes[0].clone());
+        assert!(validate(&duplicate).is_err());
+
+        for id in ["", "bad id", "../evil", &"a".repeat(65)] {
+            let mut settings = with_custom("#F6F7F6", 100);
+            settings.custom_themes[0].id = id.into();
+            settings.custom_theme_id = Some(id.into());
+            assert!(validate(&settings).is_err(), "id should be rejected: {id}");
+        }
+
+        let mut ok = with_custom("#F6F7F6", 100);
+        ok.custom_themes[0].id = "A_9-z".into();
+        ok.custom_theme_id = Some("A_9-z".into());
+        assert!(validate(&ok).is_ok());
     }
 
     #[test]
     fn rejects_bad_custom_theme_values() {
-        assert!(validate(&with_custom("sepia", "#F6F7F6", 100)).is_err());
-        assert!(validate(&with_custom("light", "F6F7F6", 100)).is_err());
-        assert!(validate(&with_custom("light", "#F6F7", 100)).is_err());
-        assert!(validate(&with_custom("light", "#GGGGGG", 100)).is_err());
-        assert!(validate(&with_custom("light", "#F6F7F6", 101)).is_err());
-        assert!(validate(&with_custom("dark", "#101211", 0)).is_ok());
+        assert!(validate(&with_custom("F6F7F6", 100)).is_err());
+        assert!(validate(&with_custom("#F6F7", 100)).is_err());
+        assert!(validate(&with_custom("#GGGGGG", 100)).is_err());
+        assert!(validate(&with_custom("#F6F7F6", 101)).is_err());
+        assert!(validate(&with_custom("#101211", 0)).is_ok());
+
+        for (field, value) in [
+            ("onSurface", "17181A"),
+            ("onSurfaceMuted", "#56"),
+            ("primary", "#XYZXYZ"),
+            ("hairline", ""),
+        ] {
+            let mut settings = with_custom("#F6F7F6", 100);
+            match field {
+                "onSurface" => settings.custom_themes[0].on_surface = value.into(),
+                "onSurfaceMuted" => settings.custom_themes[0].on_surface_muted = value.into(),
+                "primary" => settings.custom_themes[0].primary = value.into(),
+                _ => settings.custom_themes[0].hairline = value.into(),
+            }
+            assert!(
+                validate(&settings).is_err(),
+                "text color should be rejected: {field}"
+            );
+        }
     }
 
     #[test]
     fn rejects_unsafe_background_name() {
-        let theme = CustomTheme {
-            background: Some("../secret.jpg".into()),
-            ..CustomTheme::default()
-        };
-        let settings = Settings {
-            theme: "custom".into(),
-            custom_theme: Some(theme),
-            ..Settings::default()
-        };
+        let mut settings = with_custom("#F6F7F6", 100);
+        settings.custom_themes[0].background = Some("../secret.jpg".into());
         assert!(validate(&settings).is_err());
 
-        let theme = CustomTheme {
-            background: Some("a1b2c3.jpg".into()),
-            ..CustomTheme::default()
-        };
-        let settings = Settings {
-            theme: "custom".into(),
-            custom_theme: Some(theme),
-            ..Settings::default()
-        };
+        settings.custom_themes[0].background = Some("a1b2c3.jpg".into());
         assert!(validate(&settings).is_ok());
     }
 
     #[test]
-    fn validates_ui_font() {
-        let ok = Settings {
-            ui_font: Some(UiFont {
+    fn validates_font_per_theme() {
+        assert!(
+            validate(&with_font(UiFont {
                 name: "f3c9a1.woff2".into(),
                 label: "霞鹜文楷".into(),
-            }),
-            ..Settings::default()
-        };
-        assert!(validate(&ok).is_ok());
+            }))
+            .is_ok()
+        );
 
-        let bad_ext = Settings {
-            ui_font: Some(UiFont {
-                name: "f3c9a1.ttc".into(),
-                label: "集合".into(),
-            }),
-            ..Settings::default()
-        };
-        assert!(validate(&bad_ext).is_err());
+        let long_label = "字".repeat(41);
+        for (name, label) in [
+            ("f3c9a1.ttc", "集合"),
+            ("../evil.ttf", "evil"),
+            ("f3c9a1.ttf", long_label.as_str()),
+        ] {
+            assert!(
+                validate(&with_font(UiFont {
+                    name: name.into(),
+                    label: label.into(),
+                }))
+                .is_err(),
+                "font should be rejected: {name}"
+            );
+        }
+    }
 
-        let traversal = Settings {
-            ui_font: Some(UiFont {
-                name: "../evil.ttf".into(),
-                label: "evil".into(),
-            }),
-            ..Settings::default()
-        };
-        assert!(validate(&traversal).is_err());
+    #[test]
+    fn legacy_base_only_seeds_missing_text_colors() {
+        let conn = test_db();
+        insert_setting(&conn, "theme", json!("custom"));
+        insert_setting(
+            &conn,
+            "customThemes",
+            json!([{
+                "id": "theme-2",
+                "base": "dark",
+                "primary": "#ABCDEF",
+                "surface": { "color": "#101211", "alpha": 100 },
+                "card": { "color": "#181A19", "alpha": 100 },
+                "inset": { "color": "#0C0D0D", "alpha": 100 },
+                "scrim": { "color": "#000000", "alpha": 60 }
+            }]),
+        );
 
-        let long_label = Settings {
-            ui_font: Some(UiFont {
-                name: "f3c9a1.ttf".into(),
-                label: "字".repeat(41),
+        let settings = get_all(&conn).expect("read settings");
+        let theme = &settings.custom_themes[0];
+        assert_eq!(theme.on_surface, "#ECEEED");
+        assert_eq!(theme.on_surface_muted, "#9BA29F");
+        assert_eq!(theme.primary, "#ABCDEF");
+        assert_eq!(theme.hairline, "#2A2F2D");
+
+        let stored = serde_json::to_value(theme).expect("serialize theme");
+        assert!(stored.get("base").is_none());
+        assert_eq!(
+            stored.get("onSurface").and_then(|value| value.as_str()),
+            Some("#ECEEED")
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_single_theme() {
+        let conn = test_db();
+        insert_setting(&conn, "theme", json!("custom"));
+        insert_setting(
+            &conn,
+            "customTheme",
+            json!({
+                "base": "dark",
+                "surface": { "color": "#101211", "alpha": 90 },
+                "card": { "color": "#181A19", "alpha": 80 },
+                "inset": { "color": "#0C0D0D", "alpha": 100 },
+                "scrim": { "color": "#000000", "alpha": 60 },
+                "background": "a1b2c3.jpg"
             }),
-            ..Settings::default()
-        };
-        assert!(validate(&long_label).is_err());
+        );
+        insert_setting(
+            &conn,
+            "uiFont",
+            json!({ "name": "f3c9a1.ttf", "label": "霞鹜文楷" }),
+        );
+
+        let migrated = get_all(&conn).expect("read settings");
+        assert_eq!(migrated.custom_themes.len(), 1);
+        assert_eq!(migrated.custom_themes[0].id, "legacy-theme-1");
+        assert_eq!(migrated.custom_themes[0].on_surface, "#ECEEED");
+        assert_eq!(migrated.custom_themes[0].on_surface_muted, "#9BA29F");
+        assert_eq!(migrated.custom_themes[0].primary, "#5FC9B4");
+        assert_eq!(migrated.custom_themes[0].hairline, "#2A2F2D");
+        assert_eq!(
+            migrated.custom_themes[0]
+                .font
+                .as_ref()
+                .map(|font| font.label.as_str()),
+            Some("霞鹜文楷")
+        );
+        assert_eq!(migrated.custom_theme_id.as_deref(), Some("legacy-theme-1"));
+
+        let mut conn = conn;
+        let next = patch(&mut conn, json!({ "language": "en" })).expect("patch settings");
+        assert_eq!(next.custom_themes.len(), 1);
+        let legacy_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key IN ('customTheme', 'uiFont')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count legacy keys");
+        assert_eq!(legacy_left, 0);
     }
 }

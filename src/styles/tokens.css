@@ -192,18 +192,16 @@ html[data-scheme="dark"] {
   --e-2: none;
 }
 
-/* 自定义主题只用基色（默认浅色/深色）的文字与强调色，四组底色由根节点内联 rgba 提供。 */
+/* 自定义主题的四组底色与四项文字色由根节点内联变量提供，其它文字层级与浅色底按主色推导。 */
+html[data-theme="custom"] {
+  --c-accent: var(--c-primary);
+  --c-on-surface-faint: color-mix(in srgb, var(--c-on-surface-muted) 60%, var(--c-surface-flat));
+  --c-primary-soft: color-mix(in srgb, var(--c-primary) 14%, var(--c-surface-flat));
+  --c-hit: color-mix(in srgb, var(--c-primary) 24%, var(--c-surface-flat));
+}
+
 html[data-theme="custom"][data-scheme="dark"] {
-  --c-on-surface: #eceeed;
-  --c-on-surface-muted: #9ba29f;
-  --c-on-surface-faint: #6d7472;
-  --c-primary: #5fc9b4;
-  --c-on-primary: #052b24;
-  --c-primary-soft: #1b3a34;
-  --c-accent: #5fc9b4;
   --c-danger: #e57366;
-  --c-hairline: #2a2f2d;
-  --c-hit: #1f4a41;
   --c-checker-a: #1b1b1b;
   --c-checker-b: #141414;
 }

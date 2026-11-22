@@ -1,22 +1,32 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { mdiArrowLeft } from "@mdi/js";
-import { describeError, themeBgImport, themeBgRemove } from "../ipc/client";
-import type { CustomTheme, ThemeBase } from "../ipc/types";
+import {
+  describeError,
+  fontImport,
+  fontRemove,
+  themeBgImport,
+  themeBgRemove,
+} from "../ipc/client";
+import type { CustomTheme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
 import {
-  customBaseOption,
-  defaultCustomTheme,
+  cloneCustomTheme,
+  LIGHT_THEMES,
+  seedCustomTheme,
   slotRgba,
 } from "../constants/themes";
 import { themeBgUrl } from "../utils/assetUrl";
 import { useBackLayer } from "../composables/useBackLayer";
 import { useSession } from "../stores/session";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
 import Icon from "../components/Icon.vue";
 
 type ModuleKey = "surface" | "card" | "inset" | "scrim";
+type TextKey = "onSurface" | "onSurfaceMuted" | "primary" | "hairline";
 
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{ themeId: string }>();
+const emit = defineEmits<{ close: []; delete: [id: string] }>();
 const session = useSession();
 
 const MODULES: { key: ModuleKey; label: MessageKey }[] = [
@@ -26,28 +36,22 @@ const MODULES: { key: ModuleKey; label: MessageKey }[] = [
   { key: "scrim", label: "theme.module.scrim" },
 ];
 
-const BASES: { base: ThemeBase; label: MessageKey }[] = [
-  { base: "light", label: "theme.light" },
-  { base: "dark", label: "theme.dark" },
+const TEXTS: { key: TextKey; label: MessageKey }[] = [
+  { key: "onSurface", label: "theme.text" },
+  { key: "onSurfaceMuted", label: "theme.textMuted" },
+  { key: "primary", label: "theme.accent" },
+  { key: "hairline", label: "theme.hairline" },
 ];
 
-function cloneTheme(source: CustomTheme): CustomTheme {
-  return {
-    base: source.base,
-    surface: { ...source.surface },
-    card: { ...source.card },
-    inset: { ...source.inset },
-    scrim: { ...source.scrim },
-    background: source.background,
-  };
-}
-
+const initial = session.settings.customThemes.find((theme) => theme.id === props.themeId);
 const draft = ref<CustomTheme>(
-  cloneTheme(session.settings.customTheme ?? defaultCustomTheme("light")),
+  initial
+    ? cloneCustomTheme(initial, initial.id)
+    : seedCustomTheme(LIGHT_THEMES[0], props.themeId),
 );
-const base = computed(() => customBaseOption(draft.value.base).preview);
 const busy = ref(false);
 const error = ref<string | null>(null);
+const confirmDelete = ref(false);
 const backgroundBroken = ref(false);
 const backgroundUrl = computed(() => themeBgUrl(draft.value.background));
 
@@ -66,10 +70,27 @@ watch(
 let chain: Promise<unknown> = Promise.resolve();
 
 function queuePatch(next: CustomTheme): Promise<void> {
-  const snapshot = cloneTheme(next);
-  const task = chain.then(() => session.patch({ customTheme: snapshot }));
+  const snapshot = cloneCustomTheme(next, next.id);
+  const task = chain.then(async () => {
+    const customThemes = session.settings.customThemes.map((theme) =>
+      theme.id === snapshot.id ? snapshot : theme,
+    );
+    await session.patch({ customThemes });
+  });
   chain = task.catch(() => undefined);
   return task.then(() => undefined);
+}
+
+function backgroundShared(name: string): boolean {
+  return session.settings.customThemes.some(
+    (theme) => theme.id !== draft.value.id && theme.background === name,
+  );
+}
+
+function fontShared(name: string): boolean {
+  return session.settings.customThemes.some(
+    (theme) => theme.id !== draft.value.id && theme.font?.name === name,
+  );
 }
 
 async function commitDraft() {
@@ -95,11 +116,9 @@ function setAlpha(key: ModuleKey, input: HTMLInputElement) {
   preview();
 }
 
-async function setBase(next: ThemeBase) {
-  if (draft.value.base === next) return;
-  draft.value.base = next;
+function setText(key: TextKey, input: HTMLInputElement) {
+  draft.value[key] = input.value;
   preview();
-  await commitDraft();
 }
 
 async function pickBackground() {
@@ -113,7 +132,7 @@ async function pickBackground() {
     draft.value.background = imported.name;
     preview();
     await queuePatch(draft.value);
-    if (previous && previous !== imported.name) {
+    if (previous && previous !== imported.name && !backgroundShared(previous)) {
       try {
         await themeBgRemove(previous);
       } catch (err) {
@@ -137,28 +156,7 @@ async function removeBackground() {
   preview();
   try {
     await queuePatch(draft.value);
-    try {
-      await themeBgRemove(previous);
-    } catch (err) {
-      error.value = describeError(err);
-    }
-  } catch (err) {
-    error.value = describeError(err);
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function reset() {
-  if (busy.value) return;
-  const previous = draft.value.background;
-  busy.value = true;
-  error.value = null;
-  draft.value = defaultCustomTheme(draft.value.base);
-  preview();
-  try {
-    await queuePatch(draft.value);
-    if (previous) {
+    if (!backgroundShared(previous)) {
       try {
         await themeBgRemove(previous);
       } catch (err) {
@@ -167,6 +165,75 @@ async function reset() {
     }
   } catch (err) {
     error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function pickFont() {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = null;
+  const previous = draft.value.font;
+  try {
+    const imported = await fontImport();
+    if (!imported) return;
+    draft.value.font = { name: imported.name, label: imported.label };
+    preview();
+    await queuePatch(draft.value);
+    if (
+      previous &&
+      previous.name !== imported.name &&
+      !fontShared(previous.name)
+    ) {
+      try {
+        await fontRemove(previous.name);
+      } catch (err) {
+        error.value = describeError(err);
+      }
+    }
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function resetFont() {
+  if (busy.value) return;
+  const previous = draft.value.font;
+  if (!previous) return;
+  busy.value = true;
+  error.value = null;
+  draft.value.font = null;
+  preview();
+  try {
+    await queuePatch(draft.value);
+    if (!fontShared(previous.name)) {
+      try {
+        await fontRemove(previous.name);
+      } catch (err) {
+        error.value = describeError(err);
+      }
+    }
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function askDelete() {
+  if (!busy.value) confirmDelete.value = true;
+}
+
+async function deleteTheme() {
+  confirmDelete.value = false;
+  busy.value = true;
+  try {
+    // 等编辑器自己的写入全部落库，再交给主题页删除，避免迟到写入把它带回来。
+    await chain;
+    emit("delete", draft.value.id);
   } finally {
     busy.value = false;
   }
@@ -186,6 +253,7 @@ useBackLayer(() => true, close);
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
+    if (confirmDelete.value) return;
     event.preventDefault();
     close();
   }
@@ -207,7 +275,15 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div class="sheet" role="dialog" aria-modal="true" :aria-label="t('theme.sheetTitle')">
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="t('theme.sheetTitle')"
+      :style="demoStyle"
+    >
+      <div class="sheet-bg checker" aria-hidden="true" />
+      <div class="sheet-tint" aria-hidden="true" />
       <header class="topbar">
         <button
           ref="backButton"
@@ -223,48 +299,29 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="scroll">
-        <div class="demo checker" :style="demoStyle" aria-hidden="true">
+        <div class="demo checker" aria-hidden="true">
           <div class="demo-shell" :style="{ background: slotRgba(draft.surface) }" />
           <div
             class="demo-card"
             :style="{
               background: slotRgba(draft.card),
-              borderColor: base.hairline,
+              borderColor: draft.hairline,
             }"
           >
-            <span class="demo-title" :style="{ color: base.onSurface }">
+            <span class="demo-title" :style="{ color: draft.onSurface }">
               {{ t("theme.customSample.title") }}
             </span>
-            <span class="demo-text" :style="{ color: base.onSurfaceMuted }">
+            <span class="demo-text" :style="{ color: draft.onSurfaceMuted }">
               {{ t("theme.customSample.text") }}
             </span>
             <span
               class="demo-chip"
-              :style="{ background: slotRgba(draft.inset), color: base.primary }"
+              :style="{ background: slotRgba(draft.inset), color: draft.primary }"
             >
               {{ t("theme.custom") }}
             </span>
           </div>
         </div>
-
-        <section class="panel">
-          <div class="row">
-            <span class="row-label">{{ t("theme.base") }}</span>
-            <div class="segmented" role="group" :aria-label="t('theme.base')">
-              <button
-                v-for="option in BASES"
-                :key="option.base"
-                class="segment"
-                :class="{ on: draft.base === option.base }"
-                type="button"
-                :aria-pressed="draft.base === option.base"
-                @click="setBase(option.base)"
-              >
-                {{ t(option.label) }}
-              </button>
-            </div>
-          </div>
-        </section>
 
         <section class="panel">
           <div v-for="module in MODULES" :key="module.key" class="row">
@@ -289,6 +346,20 @@ onBeforeUnmount(() => {
               @change="commitDraft"
             />
             <span class="alpha-value">{{ draft[module.key].alpha }}%</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div v-for="entry in TEXTS" :key="entry.key" class="row">
+            <span class="row-label">{{ t(entry.label) }}</span>
+            <input
+              class="swatch"
+              type="color"
+              :value="draft[entry.key].toLowerCase()"
+              :aria-label="t(entry.label)"
+              @input="setText(entry.key, $event.target as HTMLInputElement)"
+              @change="commitDraft"
+            />
           </div>
         </section>
 
@@ -325,12 +396,52 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section class="panel">
+          <div class="row font-row">
+            <span class="row-label">{{ t("theme.font") }}</span>
+            <span class="font-actions">
+              <span class="font-name">
+                {{ draft.font?.label ?? t("theme.fontDefault") }}
+              </span>
+              <span class="font-buttons">
+                <button
+                  class="text-btn"
+                  type="button"
+                  :disabled="busy"
+                  @click="pickFont"
+                >
+                  {{ t("theme.fontPick") }}
+                </button>
+                <button
+                  v-if="draft.font"
+                  class="text-btn danger"
+                  type="button"
+                  :disabled="busy"
+                  @click="resetFont"
+                >
+                  {{ t("theme.fontReset") }}
+                </button>
+              </span>
+            </span>
+          </div>
+        </section>
+
         <p v-if="error" class="error">{{ error }}</p>
 
-        <button class="reset" type="button" :disabled="busy" @click="reset">
-          {{ t("theme.reset") }}
+        <button class="delete" type="button" :disabled="busy" @click="askDelete">
+          {{ t("theme.delete") }}
         </button>
       </div>
+
+      <ConfirmDialog
+        :open="confirmDelete"
+        :title="t('theme.deleteTitle')"
+        :message="t('theme.deleteConfirm')"
+        :confirm-label="t('theme.delete')"
+        danger
+        @confirm="deleteTheme"
+        @cancel="confirmDelete = false"
+      />
     </div>
   </Teleport>
 </template>
@@ -342,9 +453,25 @@ onBeforeUnmount(() => {
   z-index: 90;
   display: flex;
   flex-direction: column;
-  background: var(--c-surface);
   padding-top: var(--safe-top);
   padding-inline: var(--safe-left) var(--safe-right);
+}
+
+/* 编辑层自带方格/背景层与半透明外壳：盖住下面的主题页，透明度只透出最底层。 */
+.sheet-bg,
+.sheet-tint {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sheet-bg {
+  z-index: -2;
+}
+
+.sheet-tint {
+  z-index: -1;
+  background: var(--c-surface);
 }
 
 .topbar {
@@ -467,27 +594,6 @@ onBeforeUnmount(() => {
   color: var(--c-on-surface);
 }
 
-.segmented {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: var(--r-pill);
-  background: var(--c-surface-2);
-  flex: none;
-}
-
-.segment {
-  min-height: 34px;
-  padding-inline: var(--s-4);
-  border-radius: var(--r-pill);
-  font-size: var(--t-small);
-  color: var(--c-on-surface-muted);
-}
-
-.segment.on {
-  background: var(--c-primary);
-  color: var(--c-on-primary);
-}
-
 .swatch {
   flex: none;
   width: 32px;
@@ -578,6 +684,34 @@ onBeforeUnmount(() => {
   flex: none;
 }
 
+.font-row {
+  gap: var(--s-3);
+}
+
+.font-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-1);
+  min-width: 0;
+  flex: none;
+  max-width: 60%;
+}
+
+.font-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-on-surface-muted);
+  font-size: var(--t-small);
+}
+
+.font-buttons {
+  display: flex;
+  gap: var(--s-3);
+}
+
 .text-btn {
   display: inline-flex;
   align-items: center;
@@ -604,7 +738,7 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
-.reset {
+.delete {
   width: 100%;
   min-height: 44px;
   margin-top: var(--s-4);
@@ -615,7 +749,7 @@ onBeforeUnmount(() => {
   font-size: var(--t-small);
 }
 
-.reset:disabled {
+.delete:disabled {
   color: var(--c-on-surface-faint);
   cursor: default;
 }

@@ -30,8 +30,6 @@ import {
   dataRestore,
   dataRestoreAndroid,
   describeError,
-  fontImport,
-  fontRemove,
   IpcError,
   journalEmptyTrash,
   journalPurge,
@@ -43,7 +41,11 @@ import {
 } from "../ipc/client";
 import type { DataInfo, JournalSummary, OpProgress } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
-import { themeLabelKey } from "../constants/themes";
+import {
+  activeCustomTheme,
+  customThemeIndex,
+  themeLabelKey,
+} from "../constants/themes";
 import { version as appVersion } from "../../package.json";
 import { useLock } from "../stores/lock";
 import { useSession } from "../stores/session";
@@ -69,7 +71,14 @@ const trashLoading = ref(true);
 const trashError = ref<string | null>(null);
 const failure = ref<string | null>(null);
 
-const themeLabel = computed(() => t(themeLabelKey(session.settings.theme)));
+const themeLabel = computed(() => {
+  const settings = session.settings;
+  if (settings.theme !== "custom") return t(themeLabelKey(settings.theme));
+  const index = customThemeIndex(settings);
+  return activeCustomTheme(settings) && index >= 0
+    ? t("theme.customN", { n: index + 1 })
+    : t("theme.custom");
+});
 
 const stats = computed(() => {
   const data = info.value;
@@ -168,51 +177,6 @@ async function setExportWidth(input: HTMLInputElement) {
   input.value = String(value);
   if (value === session.settings.exportWidth) return;
   await session.patch({ exportWidth: value });
-}
-
-const fontBusy = ref(false);
-const fontError = ref<string | null>(null);
-
-async function pickFont() {
-  if (fontBusy.value) return;
-  fontBusy.value = true;
-  fontError.value = null;
-  const previous = session.settings.uiFont;
-  try {
-    const imported = await fontImport();
-    if (!imported) return;
-    await session.patch({ uiFont: imported });
-    if (previous && previous.name !== imported.name) {
-      try {
-        await fontRemove(previous.name);
-      } catch (err) {
-        fontError.value = describeError(err);
-      }
-    }
-  } catch (err) {
-    fontError.value = describeError(err);
-  } finally {
-    fontBusy.value = false;
-  }
-}
-
-async function resetFont() {
-  const previous = session.settings.uiFont;
-  if (!previous || fontBusy.value) return;
-  fontBusy.value = true;
-  fontError.value = null;
-  try {
-    await session.patch({ uiFont: null });
-    try {
-      await fontRemove(previous.name);
-    } catch (err) {
-      fontError.value = describeError(err);
-    }
-  } catch (err) {
-    fontError.value = describeError(err);
-  } finally {
-    fontBusy.value = false;
-  }
 }
 
 async function openFolder() {
@@ -776,35 +740,6 @@ onBeforeUnmount(() => {
               <span class="number-unit">px</span>
             </span>
           </div>
-          <div class="row">
-            <span class="label">{{ t("me.font") }}</span>
-            <span class="font-actions">
-              <span class="value font-name">
-                {{ session.settings.uiFont?.label ?? t("me.fontDefault") }}
-              </span>
-              <button
-                class="text-btn"
-                type="button"
-                :disabled="fontBusy"
-                @click="pickFont"
-              >
-                {{ t("me.fontPick") }}
-              </button>
-              <button
-                v-if="session.settings.uiFont"
-                class="text-btn danger"
-                type="button"
-                :disabled="fontBusy"
-                @click="resetFont"
-              >
-                {{ t("me.fontReset") }}
-              </button>
-            </span>
-          </div>
-          <div v-if="fontError" class="row">
-            <span class="label">{{ t("me.font") }}</span>
-            <span class="value warn">{{ fontError }}</span>
-          </div>
         </div>
       </section>
 
@@ -1358,22 +1293,6 @@ html[dir="rtl"] .switch.on .knob {
 .text-btn:disabled {
   color: var(--c-on-surface-faint);
   cursor: default;
-}
-
-.font-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--s-2);
-  min-width: 0;
-}
-
-.font-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .action-row {

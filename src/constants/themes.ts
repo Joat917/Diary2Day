@@ -1,5 +1,5 @@
 import type { MessageKey } from "../i18n";
-import type { CustomTheme, Theme, ThemeBase, ThemeSlot } from "../ipc/types";
+import type { CustomTheme, Settings, Theme, ThemeSlot } from "../ipc/types";
 
 export interface ThemePreview {
   surface: string;
@@ -206,23 +206,54 @@ export function isDarkTheme(id: Theme): boolean {
   return BY_ID.get(id)?.dark === true;
 }
 
-export function customBaseOption(base: ThemeBase): ThemeOption {
-  return base === "dark" ? DARK_THEMES[0] : LIGHT_THEMES[0];
+export function newCustomThemeId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function seedCustomTheme(option: ThemeOption): CustomTheme {
+export function seedCustomTheme(option: ThemeOption, id = newCustomThemeId()): CustomTheme {
   return {
-    base: option.dark ? "dark" : "light",
+    id,
     surface: { color: option.preview.surface, alpha: 100 },
     card: { color: option.preview.surface1, alpha: 100 },
     inset: { color: option.preview.surface2, alpha: 100 },
     scrim: { color: option.preview.scrim, alpha: option.preview.scrimAlpha },
+    onSurface: option.preview.onSurface,
+    onSurfaceMuted: option.preview.onSurfaceMuted,
+    primary: option.preview.primary,
+    hairline: option.preview.hairline,
     background: null,
+    font: null,
   };
 }
 
-export function defaultCustomTheme(base: ThemeBase): CustomTheme {
-  return seedCustomTheme(customBaseOption(base));
+export function cloneCustomTheme(source: CustomTheme, id = newCustomThemeId()): CustomTheme {
+  return {
+    id,
+    surface: { ...source.surface },
+    card: { ...source.card },
+    inset: { ...source.inset },
+    scrim: { ...source.scrim },
+    onSurface: source.onSurface,
+    onSurfaceMuted: source.onSurfaceMuted,
+    primary: source.primary,
+    hairline: source.hairline,
+    background: source.background,
+    font: source.font ? { ...source.font } : null,
+  };
+}
+
+export function activeCustomTheme(settings: Settings): CustomTheme | null {
+  return (
+    settings.customThemes.find((theme) => theme.id === settings.customThemeId) ??
+    settings.customThemes[0] ??
+    null
+  );
+}
+
+export function customThemeIndex(settings: Settings): number {
+  const active = activeCustomTheme(settings);
+  return active ? settings.customThemes.indexOf(active) : -1;
 }
 
 function hexPair(hex: string, start: number): number {
@@ -232,4 +263,24 @@ function hexPair(hex: string, start: number): number {
 export function slotRgba(slot: ThemeSlot): string {
   const alpha = Math.min(100, Math.max(0, slot.alpha)) / 100;
   return `rgba(${hexPair(slot.color, 1)}, ${hexPair(slot.color, 3)}, ${hexPair(slot.color, 5)}, ${alpha})`;
+}
+
+// WCAG 相对亮度：自定义主题没有明暗开关，靠主文字亮度判断这是深色还是浅色方案。
+export function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((start) => {
+    const value = hexPair(hex, start) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+export function customScheme(theme: CustomTheme): "light" | "dark" {
+  return relativeLuminance(theme.onSurface) >= 0.5 ? "dark" : "light";
+}
+
+export function onPrimaryColor(primary: string): string {
+  const luminance = relativeLuminance(primary);
+  const white = 1.05 / (luminance + 0.05);
+  const ink = (luminance + 0.05) / (relativeLuminance("#111111") + 0.05);
+  return white >= ink ? "#ffffff" : "#111111";
 }

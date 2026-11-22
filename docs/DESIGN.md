@@ -174,7 +174,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `search_query` | `text from? to? tag_id? mood? limit` → `SearchPage{items, partial}` | 空 `text` 走同一 `journal_list` 路径（§6.3）。UI 目前只传 `text` 与 `tag_id`；`from` / `mood` 留给将来的"高级搜索"（PRD §2.5），不预埋界面。`partial=true` 时 UI 显示"结果可能不完整" |
 | `tag_list` / `tag_create` / `tag_rename` / `tag_delete` / `tag_merge` | 常规 | create/rename 按 `name_key` 查重，冲突返回 `code=tag_exists` |
 | `settings_get_all` | → `Settings` | 一次拿全量，前端启动时缓存（§5） |
-| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed`。`customTheme` / `uiFont` 走同一 `validate()`：色值 `#RRGGBB`、透明度 0–100、基色 `light`/`dark`、文件名合法（§6.8） |
+| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed`。`customThemes` / `customThemeId` 走同一 `validate()`：四组底色与四项文字色为 `#RRGGBB`、透明度 0–100、文件名合法、id 合法且不重复（§6.8） |
 | `font_import` | → `FontInfo{name, label, format}` 或 `null` | 打开系统字体选择器（桌面按扩展名过滤，Android SAF 后由 Rust 校验）。魔数只收 ttf / otf / woff / woff2，拒绝 `.ttc` 集合；≤10MB；随机名复制到 `assets/fonts/`。取消 `null`；不写设置，前端随后 `settings_patch`；锁态 `locked`（§6.8） |
 | `font_remove` | `name` → unit | 删除 `assets/fonts/` 下的字体文件；`name` 先按合法字体文件名校验（防路径穿越）；先写设置成功再删旧文件，避免删掉正在用的字体（§6.8） |
 | `theme_bg_import` | → `ThemeBackground{name, width, height}` 或 `null` | 打开图片选择器；按 EXIF 拍平后长边缩到 ≤2560（不放大），存为 `assets/theme/{随机}.jpg`（质量 82。`image` 的 WebP 编码器只有无损模式，不为此加依赖）。取消 `null`；不写设置；锁态 `locked`（§6.8） |
@@ -234,7 +234,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 **卡片用哪张图**：`asset` 与 `journal` 保持零关联（PRD §2.4）。卡片取 `journal.asset_n` / `audio_n` / `video_n` 三个分类计数与 `journal.cover_asset`，在 save 事务里和 `words`、派生 title 一起从正文按 `ddasset://{kind}/` 前缀扫出；正文变了它们就跟着变，没有额外的全表重建命令。
 
-**主题与字体不是附件**：自定义背景图与导入字体分别落 `assets/theme/`、`assets/fonts/`。两者都是非隐藏目录，现有 `allow_directory(assets_dir, true)` 已覆盖，不需要额外放行；备份递归包含 `assets/`、恢复按相对路径写回；手动“清理未使用附件”只检查 `assets_dir` 顶层的媒体文件名，不会碰这两个子目录。删改由 `font_remove` / `theme_bg_remove` 显式执行，不做引用计数。
+**主题与字体不是附件**：自定义背景图与导入字体分别落 `assets/theme/`、`assets/fonts/`。两者都是非隐藏目录，现有 `allow_directory(assets_dir, true)` 已覆盖，不需要额外放行；备份递归包含 `assets/`、恢复按相对路径写回；手动“清理未使用附件”只检查 `assets_dir` 顶层的媒体文件名，不会碰这两个子目录。删改由 `font_remove` / `theme_bg_remove` 显式执行；前端在主题增删改后按剩余主题是否仍引用同一文件决定删不删（§6.8）。
 
 ### 3.2 Android 文件 IO 走 SAF 插件，字节只在 Rust 侧搬运
 
@@ -303,7 +303,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 `journal_save` 带 `revision`，服务端比对失败返回 `bad_revision`，处理动作一个：**丢弃本次，以最后一次冲刷为准**。
 
-**自定义主题与字体**：`Settings.theme` 增加 `custom`；`customTheme` 存四组 `{color, alpha}` 与 `background`，`uiFont` 存 `{name, label}` 或 `null`（§6.8）。`applyTheme()` 对预设只写 `data-theme` / `data-scheme`；对自定义额外把四组 `rgba()` 写到根节点内联样式，并在切回预设时清空。`applyFont()` 维护唯一 `<style id="dd-ui-font">`，把字体族前置进 `--font-body`。两者都只改根节点与内联样式，视图树不重建。
+**自定义主题与字体**：`Settings.theme` 增加 `custom`；`customThemes` 存每只主题的四组 `{color, alpha}`、四项文字色（`onSurface` / `onSurfaceMuted` / `primary` / `hairline`）、`background` 与可选 `font`，`customThemeId` 指向生效项（§6.8）。`applyTheme()` 对预设只写 `data-theme` / `data-scheme` 并清空字体；对自定义额外把四组 `rgba()` 与四项文字色写到根节点内联样式，`data-scheme` 按主文字亮度推导，按生效主题的 `font` 调 `applyFont()`，切回预设时全部清空。`applyFont()` 维护唯一 `<style id="dd-ui-font">`，把字体族前置进 `--font-body`。它们只改根节点与内联样式，视图树不重建。
 
 **背景层**：自定义主题下根节点用固定的方格/图片背景（`body::before`，图片盖在方格上、`cover` 铺满视口）；页面外壳只铺一层模块底色，侧栏与顶栏不再叠，模块底色带 alpha 时透出它。导出卡片与锁屏在渲染前把模块 alpha 视为 100、隐藏背景层，保证 PNG 不透明、锁屏不露出背景。
 
@@ -373,30 +373,44 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 
 **6.8 自定义主题与自定义字体**
 
-`settings` 表继续是 key/value，值存 JSON。扩展两个结构化 key，`theme` 增加 `custom`：
+`settings` 表继续是 key/value，值存 JSON。扩展两个结构化 key，`theme` 增加 `custom`；字体挂在主题里：
 
 ```json
 {
   "theme": "custom",
-  "customTheme": {
-    "base": "light",
-    "surface": { "color": "#F6F7F6", "alpha": 100 },
-    "card": { "color": "#FFFFFF", "alpha": 100 },
-    "inset": { "color": "#EDEFEE", "alpha": 100 },
-    "scrim": { "color": "#111312", "alpha": 45 },
-    "background": null
-  },
-  "uiFont": { "name": "f3c9a1.ttf", "label": "霞鹜文楷" }
+  "customThemes": [
+    {
+      "id": "8f3a1c02d5e64b71",
+      "surface": { "color": "#F6F7F6", "alpha": 100 },
+      "card": { "color": "#FFFFFF", "alpha": 100 },
+      "inset": { "color": "#EDEFEE", "alpha": 100 },
+      "scrim": { "color": "#111312", "alpha": 45 },
+      "onSurface": "#17181A",
+      "onSurfaceMuted": "#5F6467",
+      "primary": "#17695C",
+      "hairline": "#E4E7E6",
+      "background": "a1b2c3.jpg",
+      "font": { "name": "f3c9a1.ttf", "label": "霞鹜文楷" }
+    }
+  ],
+  "customThemeId": "8f3a1c02d5e64b71"
 }
 ```
 
+- **列表与当前项**：`customThemes` 按保存顺序存全部自定义主题，`customThemeId` 指向生效的那只；同一时刻至多一只生效。切到预设只改 `theme`，不动列表与 `customThemeId`；点自定义卡片时写 `theme="custom"` 与对应的 `customThemeId`。
+- **id 与编号**：`id` 在创建时由前端生成（16 位小写十六进制，`crypto.getRandomValues`），编辑不改。校验只接受 1–64 位 ASCII 字母/数字/`_`/`-`，列表内不得重复；`theme="custom"` 时 `customThemeId` 必须命中列表里的一项，列表为空同样拒绝。编号不落库：显示名由数组下标派生（自定义 1..N），删除后按剩余顺序重排。
 - **模块映射固定四组**：`surface → --c-surface`（页面与外壳）、`card → --c-surface-1`（卡片与浮层）、`inset → --c-surface-2`（凹陷与输入）、`scrim → --c-scrim`。不拆第五层，避免把每个组件的表面再分一遍；对话框归“卡片与浮层”，工具栏与输入框归“凹陷与输入”。
-- **校验**（`db/settings.rs::validate`）：色值 `^#[0-9A-Fa-f]{6}$`，`alpha` 为 0–100 的整数，`base ∈ {light, dark}`，`background` 为 `null` 或合法资产名，`uiFont.name` 为合法字体文件名且扩展名在 `ttf/otf/woff/woff2`、`label` trim 后 ≤40 字符；越界返回 `bad_setting`，缺字段走 serde 默认值。
-- **种子与切换**：首次使用自定义主题（点卡片或进编辑层，且库里还没有 `customTheme`）时由前端以当前预设生成并 `settings_patch`；之后色块与滑杆在 `change`（松手）时写库一次，拖动只改本地预览。`applyTheme()` 对 `custom` 写 `data-theme="custom"`、`data-scheme=base`、四组 `rgba()` 内联；切回预设清空内联值。前端判断明暗一律以 `data-scheme` 为准，`isDarkTheme()` 继续只服务预设，主题行与卡片文案的取值不受影响。
-- **背景图**：`theme_bg_import` 复用缩略图的解码与 EXIF 拍平路径（§3.1），长边缩到 2560（不放大）、JPEG 质量 82，随机名落 `assets/theme/`；设置只存文件名。删除顺序是先 `settings_patch` 置 `null`，成功后 `theme_bg_remove(old)`。文件缺失时按方格降级并在 `console.warn` 带源地址，不阻断界面。
-- **字体**：`font_import` 随机名落 `assets/fonts/`，`label` 取原文件 stem（去路径、trim、≤40 字符），`format` 由魔数决定；写设置成功后再 `font_remove(old)`。`applyFont()` 注入唯一 `<style id="dd-ui-font">` 并前置 `--font-body`；等宽字体与图标不参与。加载失败回落默认栈，`document.fonts` 的错误写进控制台，不自动清设置。
-- **导出**：不改变 §6.7 的单图路径。进入导出前把导出卡片的模块 alpha 视为 100、不挂背景层；有自定义字体时用 `html-to-image` 的 `getFontEmbedCSS(exportCard)` 只取一次，传给所有分段的 `toPng`，避免每段重复抓取与 base64。取 CSS 失败按 `export_image` 报错，**不静默换字体**。
-- **锁屏**：`LockOverlay` 用 `surface` 的 100% 不透明值，不渲染背景层。
+- **文字与方案**：四项文字色均为不透明 `#RRGGBB`，直接映射 `onSurface → --c-on-surface`、`onSurfaceMuted → --c-on-surface-muted`、`primary → --c-primary`、`hairline → --c-hairline`。不再有 `base`：`data-scheme` 由主文字相对亮度推导（≥ 0.5 记深色方案），继续决定原生控件、滚动条、方格底、阴影与危险色的深浅。其余层级色在 `tokens.css` 的 `html[data-theme="custom"]` 里推导：`--c-accent` 取强调色，`--c-on-surface-faint` = 次要文字 60% 混入 `--c-surface-flat`，`--c-primary-soft` = 强调色 14% 同法混入，`--c-hit` = 强调色 24% 同法混入；`--c-on-primary` 由前端按强调色与白/近黑的对比度取较高者，写入根节点内联样式。
+- **字体随主题**：`font` 为 `null` 或 `{name, label}`，校验同以前的 `uiFont`（安全文件名 + `ttf/otf/woff/woff2`，`label` trim ≤40）。只有生效的自定义主题的字体参与 `applyFont()`；预设与非生效主题的字体不加载，切到预设时移除 `#dd-ui-font`、还原原始 `--font-body`。多个主题可引用同一个字体文件。
+- **校验**（`db/settings.rs::validate`）：四项文字色 `^#[0-9A-Fa-f]{6}$`，`alpha` 为 0–100 的整数，`background` 为 `null` 或合法资产名，`font` 按字体规则校验，id 合法且列表内唯一；越界返回 `bad_setting`，缺字段走 serde 默认值。旧数据里的 `base` 只在反序列化时用于补全四项颜色，不再写入。
+- **新建与拷贝**：前端复制当前已生效的主题。预设 → 该预设的四组颜色、alpha 100、scrim 沿用预设透明度、四项文字色取该预设、背景与字体为 `null`；自定义 → 深拷贝四组、四项文字色、`background` 与 `font`（只共享文件名，不复制文件）。新 id、追加到列表末位、立即成为 `customThemeId` 并令 `theme="custom"`，一次 `settings_patch` 后打开编辑层。
+- **编辑提交**：编辑层持有 draft 与一条串行 patch 链（第 n 次提交等第 n-1 次落库），每次提交只按 id 替换列表中的那一项，不覆盖其它主题。色块与滑杆在 `change`（松手）时提交，拖动只调 `previewCustom()` 改根节点内联样式；背景与字体选择成功即提交并生效。四项文字色只有色块、没有 alpha，松手同样提交一次。`previewCustom()` 写 `data-scheme`、四组 `rgba()` 与四项文字色，不改 `data-theme` 与字体。编辑层是全屏层，自带底层方格/背景（复用 `.checker`）与半透明 `--c-surface` 两层外壳，跟着 draft 实时更新：外壳带透明度时只透出自己的背景层，不会透出下面的主题页内容。锁屏层级仍高于编辑层。
+- **删除**：只在编辑层底部，走自绘 ConfirmDialog。确认后前端从列表移除该项；若删的是生效项，`customThemeId` 改为剩余第一项，删空则 `theme` 回退到被删主题主文字明暗对应的预设（纸白/墨夜）且 `customThemeId=null`，一次 `settings_patch` 完成。随后对旧背景图与旧字体各查一次剩余列表：没有任何主题再用这个文件名时才调 `theme_bg_remove` / `font_remove`。编辑层要先 await 自己的提交链再发删除，避免迟到的列表写入把已删主题带回来；文件清理失败只显示在主题页错误行，不回滚设置。
+- **背景图**：`theme_bg_import` 复用缩略图的解码与 EXIF 拍平路径（§3.1），长边缩到 2560（不放大）、JPEG 质量 82，随机名落 `assets/theme/`；设置只存文件名。替换或移除时先 `settings_patch` 去掉引用，成功后按剩余引用决定是否 `theme_bg_remove(old)`。文件缺失时按方格降级并在 `console.warn` 带源地址，不阻断界面。
+- **字体文件**：`font_import` 随机名落 `assets/fonts/`，`label` 取原文件 stem（去路径、trim、≤40 字符），`format` 由魔数决定。写设置成功后再检查旧字体是否仍被其它主题引用，没有再 `font_remove(old)`；恢复默认同理。等宽字体与图标不参与。加载失败回落默认栈，`document.fonts` 的错误写进控制台，不自动清设置。
+- **迁移**：单主题版本只写过 `customTheme` 与 `uiFont` 两个 key。`get_all` 在 `customThemes` 为空时读旧 `customTheme`，收成 `{id:"legacy-theme-1", font: 旧 uiFont}`；`theme=="custom"` 时把 `customThemeId` 指向它，否则主题留在列表里但不生效。`CustomTheme` 的反序列化在四项文字色缺失时按旧 `base` 取预设种子（浅色 `#17181A/#5F6467/#17695C/#E4E7E6`，深色 `#ECEEED/#9BA29F/#5FC9B4/#2A2F2D`），`base` 此后不再写入。`settings_patch` 在写入事务里一并 `DELETE FROM settings WHERE key IN ('customTheme','uiFont')`，之后只读写新 key。
+- **导出**：不改变 §6.7 的单图路径。进入导出前把导出卡片的模块 alpha 视为 100、不挂背景层；生效主题带 `font` 时用 `html-to-image` 的 `getFontEmbedCSS(exportCard)` 只取一次，传给所有分段的 `toPng`，避免每段重复抓取与 base64。取 CSS 失败按 `export_image` 报错，**不静默换字体**。
+- **锁屏**：`LockOverlay` 用生效主题 `surface` 的 100% 不透明值，不渲染背景层；界面字体照常生效。
 
 ---
 
@@ -466,9 +480,9 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 
 `backup_crypt` 用临时目录做全流程：同一口令 encrypt → decrypt 逐字节相等（空文件、短内容、正好一块、多块跨帧）；错误口令、密文篡改、尾部截断一律 `bad_password`；普通 zip 不被 `is_encrypted` 误判。
 
-`settings` 与外观资产用临时目录：非法色值、透明度越界、未知基色、非法文件名一律 `bad_setting`，缺字段用默认值；`font_import` 的 ttf/otf/woff/woff2 四种魔数样本通过，`.ttc`、伪造扩展名与 >10MB 拒绝；背景图按 EXIF 拍平、长边缩到 2560 且不放大，输出 WebP。
+`settings` 与外观资产用临时目录：非法色值（含四项文字色）、透明度越界、非法背景/字体文件名、非法或重复的主题 id、`theme=custom` 指向不存在的 id，一律 `bad_setting`，缺字段用默认值；旧 `customTheme` / `uiFont` 经 `get_all` 收进列表后通过校验，缺四项颜色的旧主题按 `base` 补成浅/深种子，`settings_patch` 后两个旧 key 被删除且不再写 `base`；`font_import` 的 ttf/otf/woff/woff2 四种魔数样本通过，`.ttc`、伪造扩展名与 >10MB 拒绝；背景图按 EXIF 拍平、长边缩到 2560 且不放大，输出 JPEG（质量 82）。
 
-前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。自定义主题测四组 `rgba()` 的生成与切回预设的清空、字体族前置与恢复默认、色值与 alpha 的归一化。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
+前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。自定义主题测四组 `rgba()` 的生成与切回预设的清空、由主文字推导 `data-scheme` 与强调色上的文字色、拷贝当前主题（预设种子 / 自定义深拷贝）、删除后的生效项回退与文件引用检查、编号随列表重排、字体族前置与随主题切换的清空、色值与 alpha 的归一化。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
 
 ---
 
@@ -508,4 +522,4 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | 主题包的 JSON 导入/导出与分享 | 主题只在本机编辑，随备份包整体迁移（§6.8） | 出现跨设备共享主题的需求时 |
 | 字体子集化、字体随安装包分发 | 用户手动导入 ≤10MB 的完整字体（§6.8） | 有授权明确且值得内置的字体时 |
 | 背景模糊、视频背景、多图轮换 | 静态单图 + 方格兜底（§6.8） | V-6 给出滚动与内存结论后 |
-| 按模块自定义圆角/阴影/描边、自定义正文与强调色（v1） | 只开放四组底色与透明度，文字与图标取基色（§6.8） | 出现明确的可读性诉求或主题争议时 |
+| 按模块自定义圆角、阴影与描边粗细；字号与图标形状可调 | 只开放四组底色、四项文字色（含强调色与描边色）与透明度，圆角/阴影/字号沿用 token（§6.8） | 出现明确的可读性诉求或主题争议时 |
