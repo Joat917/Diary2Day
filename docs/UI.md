@@ -1,6 +1,6 @@
 # Diary2Day 视觉与交互规格 v0.3
 
-[PRD.md](./PRD.md) 定意图与理由，[DESIGN.md](./DESIGN.md) 定结构与接口，**本文件定取值**。写界面时这里查不到的项，先补本文件再回组件写那一行。功能层面的取舍集中在 [DESIGN §12](./DESIGN.md)，本文件只管界面。
+[PRD.md](./PRD.md) 定意图与理由，[DESIGN.md](./DESIGN.md) 定结构与接口，**本文件定取值**。写界面时这里查不到的项，先补本文件再回组件写那一行。功能层面的取舍集中在 [DESIGN §11](./DESIGN.md)，本文件只管界面。
 
 ---
 
@@ -64,7 +64,7 @@
 - 中文段落左对齐；`letter-spacing` 取默认值。
 - PRD §7 的"首行缩进"开关实现为 `text-indent: 2em`，作用范围是 `p`；标题、列表项、代码块齐头。
 
-自定义界面字体（§3.13、§6）只替换 `--font-body` 的首选族，写成 `"DD-UI", system-ui, …` 后接原来的整条栈，`@font-face` 用 `font-display: swap`；`--font-mono` 不变，图标是 SVG 不受影响。字体文件由用户导入，不入安装包。
+自定义界面字体（§3.13、§6）只替换 `--font-body` 的首选族，按顺序写成 `"DD-UI-1", "DD-UI-2", …, system-ui, …` 后接原来的整条栈，`@font-face` 用 `font-display: swap`；`--font-mono` 不变，图标是 SVG 不受影响。字体文件由用户导入，不入安装包。
 
 ### 1.3 间距、圆角、层级
 
@@ -98,7 +98,7 @@
 
 ---
 
-## 3. 九个高风险界面
+## 3. 十四个高风险界面
 
 ### 3.1 WeekStrip（首页常驻周条）
 
@@ -340,12 +340,12 @@
 
 - 主题由 `session` 里一个设置驱动：设置只存具体主题 id，`applyTheme` 把 id 写进 `html[data-theme]`，同时把明暗写进 `html[data-scheme]`。组件只消费 token，Vditor 与原生控件的明暗判断读 `data-scheme`，不再逐个比较主题名。`custom` 另外把四组模块与描边的 `rgba()`、主文字、次要文字、强调色写到根节点内联样式，`data-scheme` 按主文字亮度推导；切回预设时这些内联值全部清空。
 - 首次启动时库里仍是 `system` 哨兵值，前端按 `matchMedia('(prefers-color-scheme)')` 选纸白/墨夜并写回具体 id，之后不再响应系统变化；切换任何主题只改这两个属性，不重载页面。
-- 自定义字体随自定义主题保存，由文档里唯一一条 `<style id="dd-ui-font">` 的 `@font-face` 提供，`--font-body` 前置 `"DD-UI"`；换主题或换字体只重写这一条，不重载页面。预设主题不带自定义字体，切到预设即回默认栈。字体不可用时回落默认栈并在控制台报完整原因。
+- 自定义字体随自定义主题保存，由文档里唯一一条 `<style id="dd-ui-font">` 提供一组 `@font-face`，`--font-body` 按顺序前置 `"DD-UI-1"`、`"DD-UI-2"`…；换主题或换字体只重写这一条，不重载页面。预设主题不带自定义字体，切到预设即回默认栈。字体不可用时回落默认栈并在控制台报完整原因。
 - 自定义主题的背景层固定在最底下（方格 + 可选图片），模块底色带透明度时透出它。导出图片与锁屏按模块色的 100% 不透明度压平，且不挂背景层。
 - 原生控件的明暗只认 `html[data-scheme]` 上的 `color-scheme`：时间输入的时钟图标、下拉弹层、滚动条都继承它。任何组件都不在元素上再写 `color-scheme: light dark`，否则会在系统与主题明暗不一致时露出白底或白色图标。
 - 需要反色的图片走 CSS filter。
 - 文案长度上限：英文按钮 ≤ 3 词、中文 ≤ 6 字；更长的动作改用图标 + tooltip。i18n 的实现见 DESIGN §5。
-- RTL：`dir="rtl"` 一次翻转 + 全部 logical properties（DESIGN §5）。镜像清单 —— ←/→ 图标、周条与月历的排列方向、`text-align` 起点。保持原样 —— 表情图标、数字、日期、`ddasset://` URL、代码块。月历在 RTL 下的周起始与补白位置在 V-2 那轮一起验。
+- RTL：`dir="rtl"` 一次翻转 + 全部 logical properties（DESIGN §5）。镜像清单 —— ←/→ 图标、周条与月历的排列方向、`text-align` 起点。保持原样 —— 表情图标、数字、日期、`ddasset://` URL、代码块。月历在 RTL 下的周起始与补白位置需在 Android WebView 上验一次。
 
 ---
 

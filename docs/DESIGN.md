@@ -4,7 +4,7 @@
 
 分工：**本文件管结构与接口，[UI.md](./UI.md) 管长相。** 冲突时，交互意图以 PRD 为准，视觉以 UI.md 为准，接口以本文件为准。取舍的理由写在 PRD，本文件只写结论。
 
-否决掉的选项集中在 §12。配套现状：`src-tauri` 是 Tauri v2 空脚手架，`panic = "abort"`、`csp: null`、只有 `tauri-plugin-opener`，§9 列出要改的配置。
+否决掉的选项集中在 §11。
 
 ---
 
@@ -252,7 +252,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 
 ## 4. 数据访问的形态
 
-`rusqlite` + `Mutex<Connection>` 是全部并发原语（池、ORM、repository 抽象的取舍见 §12）。
+`rusqlite` + `Mutex<Connection>` 是全部并发原语（池、ORM、repository 抽象的取舍见 §11）。
 
 - 写连接只服务交互；导出、备份、一致性校验走第二个只读连接（`Connection::open_with_flags(Readonly)` + `PRAGMA query_only=ON`，WAL 允许并发读）。
 - **临界区内只跑同步代码。** 所有数据库操作写进 `tokio::task::spawn_blocking(move || …)`，锁在闭包里进出。`db/conn.rs` 提供 `with_db(|c| …)` 与 `with_db_ro(|c| …)`，业务代码经由这两个 helper 取连接，锁的进出集中在此。
@@ -303,7 +303,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 `journal_save` 带 `revision`，服务端比对失败返回 `bad_revision`，处理动作一个：**丢弃本次，以最后一次冲刷为准**。
 
-**自定义主题与字体**：`Settings.theme` 增加 `custom`；`customThemes` 存每只主题的四组 `{color, alpha}`、四项文字色（`onSurface` / `onSurfaceMuted` / `primary` 为不透明色，描边 `hairline` 为带 `alpha` 的主题槽）、`background` 与可选 `font`，`customThemeId` 指向生效项（§6.8）。`applyTheme()` 对预设只写 `data-theme` / `data-scheme` 并清空字体；对自定义额外把四组模块与描边的 `rgba()`、三个不透明文字色写到根节点内联样式，`data-scheme` 按主文字亮度推导，按生效主题的 `font` 调 `applyFont()`，切回预设时全部清空。`applyFont()` 维护唯一 `<style id="dd-ui-font">`，把字体族前置进 `--font-body`。它们只改根节点与内联样式，视图树不重建。
+**自定义主题与字体**：`Settings.theme` 增加 `custom`；`customThemes` 存每只主题的四组 `{color, alpha}`、四项文字色（`onSurface` / `onSurfaceMuted` / `primary` 为不透明色，描边 `hairline` 为带 `alpha` 的主题槽）、`background` 与 `fonts`（0–3 项），`customThemeId` 指向生效项（§6.8）。`applyTheme()` 对预设只写 `data-theme` / `data-scheme` 并清空字体；对自定义额外把四组模块与描边的 `rgba()`、三个不透明文字色写到根节点内联样式，`data-scheme` 按主文字亮度推导，按生效主题的 `fonts` 调 `applyFont()`，切回预设时全部清空。`applyFont()` 维护唯一 `<style id="dd-ui-font">`，把字体族前置进 `--font-body`。它们只改根节点与内联样式，视图树不重建。
 
 **背景层**：自定义主题下根节点用固定的方格/图片背景（`body::before`，图片盖在方格上、`cover` 铺满视口）；页面外壳只铺一层模块底色，侧栏与顶栏不再叠，模块底色带 alpha 时透出它。导出卡片与锁屏在渲染前把模块 alpha 视为 100、隐藏背景层，保证 PNG 不透明、锁屏不露出背景。
 
@@ -409,7 +409,7 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 - **卡片文案**：`sampleTitle` / `sampleText` 为 `null` 或字符串，只服务主题页卡片的演示文字。`null` 取界面语言的默认文案（标题「自定义主题」、说明「长按编辑该主题」）；自定义后按原文保存、不随语言切换。说明文字的默认值就是操作提示，替代没有编辑按钮后的发现路径。前端在 `change`（失焦/回车）时 trim，空串写回 `null`；Rust 拒绝 trim 后为空或超限（标题 40 字、说明 120 字）。
 - **字体随主题**：`fonts` 为 0–3 项的 `{name, label}` 列表，顺序即优先级；每项校验同以前的 `uiFont`（安全文件名 + `ttf/otf/woff/woff2`，`label` trim ≤40），列表内文件名不得重复。`applyFont()` 为第 i 项注册家族 `DD-UI-{i+1}`，把 `"DD-UI-1", "DD-UI-2", …, 原始栈` 拼进 `--font-body`；浏览器逐字符回退，前面的字体缺的字自动用后面的。只有生效的自定义主题的字体参与加载；预设与非生效主题不加载，切到预设时移除 `#dd-ui-font`、还原原始 `--font-body`。多个主题、同一主题内都可以引用同一个文件（后者按重复校验拒绝）。
 - **校验**（`db/settings.rs::validate`）：三个不透明文字色与描边色 `^#[0-9A-Fa-f]{6}$`，五组 `alpha`（四组模块 + 描边）均为 0–100 的整数，`sampleTitle` / `sampleText` 为 `null` 或 trim 后非空且不超上限的文本，`background` 为 `null` 或合法资产名，`fonts` 最多 3 项、每项按字体规则校验且名称不重复，id 合法且列表内唯一；越界返回 `bad_setting`，缺字段走 serde 默认值。旧数据里的 `base` 只在反序列化时用于补全四项颜色，不再写入；旧数据缺两项文案时按 `null` 读入。
-- **新建与拷贝**：前端复制当前已生效的主题。预设 → 该预设的四组颜色、alpha 100、scrim 沿用预设透明度、四项文字色取该预设（描边 alpha 100）、背景、字体与两项文案为 `null`；自定义 → 深拷贝四组、四项文字色（描边连同不透明度）、两项文案、`background` 与 `font`（只共享文件名，不复制文件）。新 id、追加到列表末位、立即成为 `customThemeId` 并令 `theme="custom"`，一次 `settings_patch` 后打开编辑层。
+- **新建与拷贝**：前端复制当前已生效的主题。预设 → 该预设的四组颜色、alpha 100、scrim 沿用预设透明度、四项文字色取该预设（描边 alpha 100）、背景与两项文案为 `null`、`fonts` 为空列表；自定义 → 深拷贝四组、四项文字色（描边连同不透明度）、两项文案、`background` 与 `fonts`（逐项共享文件名，不复制文件）。新 id、追加到列表末位、立即成为 `customThemeId` 并令 `theme="custom"`，一次 `settings_patch` 后打开编辑层。
 - **主题页交互**：网格末尾固定一张新卡片（标题「复制现有主题」、说明「想不想设置新主题？」、右下角加号），结构与相邻主题卡一致——同一套 `.preview` + `.pv-card`，底色/描边/文字/圆钮颜色取当前生效主题（自定义主题含方格与背景图），加号圆钮与其他卡的铅笔圆钮同尺寸；点击走上面的新建流程。点击未生效的自定义卡片只切主题，点击已生效的那张进入编辑层；任意自定义卡片长按 500ms 也进入编辑层（先应用再开层），长按预设卡片与新卡片不响应。长按用 pointer 事件计时，离开/取消/滚动中断即撤销，触发后吞掉随后的 click；自定义卡片屏蔽 `contextmenu` 与文字选择。
 - **编辑提交**：编辑层持有 draft 与一条串行 patch 链（第 n 次提交等第 n-1 次落库），每次提交只按 id 替换列表中的那一项，不覆盖其它主题。色块与滑杆在 `change`（松手）时提交，拖动只调 `previewCustom()` 改根节点内联样式；背景选择成功即提交并生效；字体添加、移除与调整顺序同样每次提交一次。主文字、次要文字与强调色只有色块；描边与模块同形，色块之外还有 0–100% 滑杆，松手同样提交一次。标题与说明输入在 `change` 时提交，输入过程只改 draft；关闭编辑层（Esc / 返回键）前若文案还没失焦，先补一次 trim 后的提交，失败则留在层内显示完整错误。`previewCustom()` 写 `data-scheme`、四组模块与描边的 `rgba()`、三个不透明文字色，不改 `data-theme` 与字体。编辑层是全屏层，自带底层方格/背景（复用 `.checker`）与半透明 `--c-surface` 两层外壳，跟着 draft 实时更新：外壳带透明度时只透出自己的背景层，不会透出下面的主题页内容。锁屏层级仍高于编辑层。
 - **删除**：只在编辑层底部，走自绘 ConfirmDialog。确认后前端从列表移除该项；若删的是生效项，`customThemeId` 改为剩余第一项，删空则 `theme` 回退到被删主题主文字明暗对应的预设（纸白/墨夜）且 `customThemeId=null`，一次 `settings_patch` 完成。随后对旧背景图与旧字体列表各查一次剩余项：旧主题的每个字体文件都要确认没有任何剩余主题引用，才调 `theme_bg_remove` / `font_remove`。编辑层要先 await 自己的提交链再发删除，避免迟到的列表写入把已删主题带回来；文件清理失败只显示在主题页错误行，不回滚设置。
@@ -452,13 +452,13 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 
 ---
 
-## 9. 要改的脚手架配置
+## 9. 脚手架配置
 
 1. `tauri.conf.json`：`app.security.assetProtocol` 已开启（`enable: true`，scope 运行时收窄）。将来显式写 `app.security.csp` 时，要给附件通道留口——`img-src 'self' asset: http://asset.localhost data:`、`media-src 'self' asset: http://asset.localhost`，两种写法并列覆盖 Windows/Android 与其它平台。
 2. `capabilities/default.json`：权限清单只列 `core:default`、`dialog:default`、`opener:default`。文件能力由 Rust 命令承担，WebView 保持零文件系统权限。
-3. 窗口配置：桌面最小尺寸；现有 800×600 固定尺寸在手机上会退化。移动端安全区由下面的第 8 条负责，不再依赖 WebView 的 `env(safe-area-inset-*)`。
+3. 窗口配置：桌面 1000×720，最小 360×360。移动端安全区由下面的第 8 条负责，不再依赖 WebView 的 `env(safe-area-inset-*)`。
 4. `clippy.toml`：`unwrap_used`/`expect_used` 设为 `deny`，对应 §4 的 `panic = "abort"` 约束。
-5. `tauri-plugin-dialog`（桌面另存为/打开目录）要动三处：`Cargo.toml`、`tauri.conf.json`、`capabilities`。
+5. `tauri-plugin-dialog`（桌面另存为/打开目录）装在三处：`Cargo.toml`、`tauri.conf.json`、`capabilities`。
 6. 应用图标：`public/app-icon.svg` 是唯一矢量源，`index.html` 以它作为 favicon；修改后运行 `npx tauri icon public/app-icon.svg` 重新生成桌面与移动端图标，不直接编辑 `src-tauri/icons/` 和 `src-tauri/gen/` 里的位图。
 7. `tauri-plugin-android-fs = "=30.2.0"`：放在 `[target.'cfg(target_os = "android")'.dependencies]`，`lib.rs` 里只在 Android 注册；桌面构建不下载也不编译。它要求 `tauri ^2.12`，并依赖 `tauri-plugin-fs`。
 8. Android 窗口适配：`targetSdk 36` 强制 edge-to-edge，WebView 的 `env(safe-area-inset-*)` 不可靠。`MainActivity.onWebViewCreate` 注册 `ViewCompat.setOnApplyWindowInsetsListener`，把 `systemBars + displayCutout` 与可见的 `ime()` 换算成 dp，经 `addJavascriptInterface` + `evaluateJavascript` 推给 `window.ddApplyInsets(top, right, bottom, left, ime)`；`main.ts` 写 `--safe-top/right/bottom/left` 与 `--ime`，CSS 只认这几个变量（默认值回退 `env()` / 0）。Activity 设 `windowSoftInputMode="adjustResize"` 以接收 IME insets（edge-to-edge 下窗口本身不缩），键盘高度由 `--ime` 扣减：`.app` 用 `calc(100dvh - var(--ime))`，`html[data-keyboard="1"]` 时隐藏底部导航与浮动按钮，输入类浮层在 `--ime` 内避让，聚焦控件在键盘打开过程中反复滚入视野。返回键由 `onBackPressedDispatcher` 接管，`evaluateJavascript("window.ddBack()")` 返回 `true` 表示已消费，否则 `finish()`。状态栏/导航栏图标明暗经 `ddInsets.setDark(true|false)` 交给 `WindowInsetsControllerCompat`，`main.ts` 观察 `html[data-scheme]` 随主题同步。
@@ -489,24 +489,11 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 
 `settings` 与外观资产用临时目录：非法色值（含描边与文字色）、透明度越界（模块与描边）、非法背景/字体文件名、字体超过 3 个或重复、非法或重复的主题 id、`theme=custom` 指向不存在的 id，一律 `bad_setting`，缺字段用默认值；旧 `customTheme` / `uiFont` 经 `get_all` 收进列表后通过校验，缺四项颜色的旧主题按 `base` 补成浅/深种子，`settings_patch` 后两个旧 key 被删除且不再写 `base`；`font_import` 的 ttf/otf/woff/woff2 四种魔数样本通过，`.ttc`、伪造扩展名与 >10MB 拒绝；背景图按 EXIF 拍平、长边缩到 2560 且不放大，输出 JPEG（质量 82）。
 
-前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。自定义主题测四组 `rgba()` 的生成与切回预设的清空、由主文字推导 `data-scheme` 与强调色上的文字色、拷贝当前主题（预设种子 / 自定义深拷贝）、删除后的生效项回退与文件引用检查、编号随列表重排、卡片文案的空值回落与长度上限、字体族前置与随主题切换的清空、色值与 alpha 的归一化。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
+前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。自定义主题测四组 `rgba()` 的生成与切回预设的清空、由主文字推导 `data-scheme` 与强调色上的文字色、拷贝当前主题（预设种子 / 自定义深拷贝）、删除后的生效项回退与文件引用检查、编号随列表重排、卡片文案的空值回落与长度上限、字体族前置与随主题切换的清空、色值与 alpha 的归一化。视觉一致性由 UI.md 的 token 与 §7 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
 
 ---
 
-## 11. 开工前要验的五件事（M0 准入，一天内能出结论）
-
-| # | 验什么 | 受阻时的退路 |
-|---|---|---|
-| V-1 | 打包的 SQLite 是否开 FTS5 且 ≥3.34（`trigram`） | 走有界 `LIKE`（`partial` 恒 true），后续加索引即可。策略选择已在 Rust 内部（§6.3），前端零改动 |
-| V-2 | ~~自定义协议在 Windows/Android WebView 下 404、Range 能否拖动~~ **已定案**：图片与音视频统一走内置 `asset` 协议 + `convertFileSrc`，scope 收窄到 `assets_dir`；原 `ddasset` 自定义协议已删除。剩余待验：Android WebView 下 `http://asset.localhost` 出图与视频拖动 | 若 Android 仍不可用，再考虑 `blob:` 或本地回环服务；逻辑 URL 与前端映射层不变，只替换 `assetUrl.ts` 的物理 URL 生成 |
-| V-3 | Vditor 在 WKWebView / Android WebView 上的四条补丁（§7）能否照搬生效，以及 `:where()` 零特异度盖得住它自带的选择器。最早验 | 换 CodeMirror 源码态，"详情即编辑"降级到 M2；样式盖得勉强就加特异度，仍然集中在同一个 override 文件里 |
-| V-4 | `Mutex<Connection>` + `spawn_blocking` 下，导出 2GB 附件目录时 UI 读写是否仍顺 | 已按第二只读连接设计（§4）；若仍卡顿，导出改成分片让出连接（每 50 条重新取锁） |
-| V-5 | ~~CSS Custom Highlight API 可用性~~ **已绕开**：搜索跳转高亮用 DOM `<mark>`（§6.3），两个 WebView 都不需要验它 | 若将来要"零 DOM 改动"的高亮，再回到 `CSS.highlights` / `::highlight()` |
-| V-6 | Android WebView 经 `http://asset.localhost` 加载 `@font-face`（含 MIME 兼容）、透明模块叠背景图的滚动帧率，以及 `html-to-image` 内联大字体后的内存峰值和分段导出耗时（§6.8） | 字体：该字体不参与导出，导出前提示并回落默认栈；背景图：长边降到 1920 并提高压缩；滚动：背景层随内容滚动或降级为纯色 |
-
----
-
-## 12. 集中记录：本项目否决的选项
+## 11. 集中记录：本项目否决的选项
 
 只有这一节写"不做"，其余章节写"怎么做"。
 
@@ -515,7 +502,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | 连接池、`sqlx`、repository trait + mock + DI 容器 | `Mutex<Connection>` + `with_db` helper，`db/journal.rs` 本身就是仓储 | 出现第二个存储后端（多日记本 / 外部 vault）时 |
 | ORM（diesel / sea-orm / sqlx 编译期查询） | 手写 SQL + `include_str!` 的 schema 文件，8 张表 | 表数超过 10，或出现需要类型安全 join 的报表需求 |
 | Clean Architecture 分层、领域事件总线 | 上限三层 `commands → db/domain → fs` | 无 |
-| 编辑器抽象接口（可换 Vditor/CodeMirror） | 直接面向 Vditor API 写 `EditorPane` | V-3 判定 Vditor 不可用时，整体替换 `EditorPane` 内部实现 |
+| 编辑器抽象接口（可换 Vditor/CodeMirror） | 直接面向 Vditor API 写 `EditorPane` | Vditor 在目标 WebView 不可用时，整体替换 `EditorPane` 内部实现 |
 | `@tauri-apps/plugin-sql` | 查询在 Rust 内核，schema/迁移/FTS 策略都在同一层 | 想让第三方直接复用前端时 |
 | `plugin-store`、`plugin-fs`、`plugin-upload`、`plugin-stronghold` | settings 进 SQLite；文件能力走自己的 `fs/` 命令；上传场景在桌面/移动里就是系统选择器；备份包加密用 RustCrypto（§6.5），整库加密按 PRD §5 不做 | 出现前端需要直接读写任意路径的需求 |
 | TanStack Query | `useCollection()`（20 行）+ `dd://data-changed` 事件驱动失效 | 视图数超过 8 个或出现跨页缓存共享 |
@@ -528,5 +515,5 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | 双 DOM 并存 + CSS `hidden-*` 断点方案（参考项目） | `useBreakpoint` 档位变化 + 组件按 `isWide` 分支渲染 | 无 |
 | 主题包的 JSON 导入/导出与分享 | 主题只在本机编辑，随备份包整体迁移（§6.8） | 出现跨设备共享主题的需求时 |
 | 字体子集化、字体随安装包分发 | 用户手动导入 ≤10MB 的完整字体（§6.8） | 有授权明确且值得内置的字体时 |
-| 背景模糊、视频背景、多图轮换 | 静态单图 + 方格兜底（§6.8） | V-6 给出滚动与内存结论后 |
+| 背景模糊、视频背景、多图轮换 | 静态单图 + 方格兜底（§6.8） | 滚动与内存结论明确后 |
 | 按模块自定义圆角、阴影与描边粗细；字号与图标形状可调 | 只开放四组底色、四项文字色（含强调色与描边色）与透明度，圆角/阴影/字号沿用 token（§6.8） | 出现明确的可读性诉求或主题争议时 |
