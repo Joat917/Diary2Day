@@ -24,6 +24,13 @@ pub fn run() {
             let state = state::AppState::init(app.handle())?;
             app.asset_protocol_scope()
                 .allow_directory(&state.paths.assets_dir, true)?;
+            // 递归通配符在 Unix 上默认跳过点开头的路径段（scope 的
+            // requireLiteralLeadingDot），.thumbs/.export 必须单独放行。
+            for name in [".thumbs", ".export"] {
+                let dir = state.paths.assets_dir.join(name);
+                std::fs::create_dir_all(&dir)?;
+                app.asset_protocol_scope().allow_directory(&dir, true)?;
+            }
             app.manage(state);
             Ok(())
         })
