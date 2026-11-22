@@ -10,12 +10,7 @@ import {
 } from "../ipc/client";
 import type { CustomTheme } from "../ipc/types";
 import { t, type MessageKey } from "../i18n";
-import {
-  cloneCustomTheme,
-  LIGHT_THEMES,
-  seedCustomTheme,
-  slotRgba,
-} from "../constants/themes";
+import { cloneCustomTheme, LIGHT_THEMES, seedCustomTheme } from "../constants/themes";
 import { themeBgUrl } from "../utils/assetUrl";
 import { useBackLayer } from "../composables/useBackLayer";
 import { useSession } from "../stores/session";
@@ -23,7 +18,7 @@ import ConfirmDialog from "../components/ConfirmDialog.vue";
 import Icon from "../components/Icon.vue";
 
 type ModuleKey = "surface" | "card" | "inset" | "scrim";
-type TextKey = "onSurface" | "onSurfaceMuted" | "primary" | "hairline";
+type TextKey = "onSurface" | "onSurfaceMuted" | "primary";
 
 const props = defineProps<{ themeId: string }>();
 const emit = defineEmits<{ close: []; delete: [id: string] }>();
@@ -40,7 +35,6 @@ const TEXTS: { key: TextKey; label: MessageKey }[] = [
   { key: "onSurface", label: "theme.text" },
   { key: "onSurfaceMuted", label: "theme.textMuted" },
   { key: "primary", label: "theme.accent" },
-  { key: "hairline", label: "theme.hairline" },
 ];
 
 const initial = session.settings.customThemes.find((theme) => theme.id === props.themeId);
@@ -55,7 +49,7 @@ const confirmDelete = ref(false);
 const backgroundBroken = ref(false);
 const backgroundUrl = computed(() => themeBgUrl(draft.value.background));
 
-const demoStyle = computed<Record<string, string>>(() => ({
+const sheetStyle = computed<Record<string, string>>(() => ({
   "--c-theme-bg": backgroundUrl.value ? `url("${backgroundUrl.value}")` : "none",
 }));
 const checkerStyle: Record<string, string> = { "--c-theme-bg": "none" };
@@ -119,6 +113,28 @@ function setAlpha(key: ModuleKey, input: HTMLInputElement) {
 function setText(key: TextKey, input: HTMLInputElement) {
   draft.value[key] = input.value;
   preview();
+}
+
+function setHairlineColor(input: HTMLInputElement) {
+  draft.value.hairline.color = input.value;
+  preview();
+}
+
+function setHairlineAlpha(input: HTMLInputElement) {
+  draft.value.hairline.alpha = Number(input.value);
+  preview();
+}
+
+type SampleKey = "sampleTitle" | "sampleText";
+
+function setSample(key: SampleKey, input: HTMLInputElement) {
+  draft.value[key] = input.value === "" ? null : input.value;
+}
+
+async function commitSample(key: SampleKey) {
+  const text = draft.value[key]?.trim();
+  draft.value[key] = text ? text : null;
+  await commitDraft();
 }
 
 async function pickBackground() {
@@ -245,7 +261,20 @@ function onBackgroundError(event: Event) {
   console.warn("[theme] background image failed to load", img?.src);
 }
 
-function close() {
+// 文案只在 change 时落库；Esc/返回键关闭前补一次，避免把刚输入的文字丢掉。
+async function close() {
+  const title = draft.value.sampleTitle?.trim() || null;
+  const text = draft.value.sampleText?.trim() || null;
+  if (title !== draft.value.sampleTitle || text !== draft.value.sampleText) {
+    draft.value.sampleTitle = title;
+    draft.value.sampleText = text;
+    try {
+      await queuePatch(draft.value);
+    } catch (err) {
+      error.value = describeError(err);
+      return;
+    }
+  }
   emit("close");
 }
 
@@ -280,7 +309,7 @@ onBeforeUnmount(() => {
       role="dialog"
       aria-modal="true"
       :aria-label="t('theme.sheetTitle')"
-      :style="demoStyle"
+      :style="sheetStyle"
     >
       <div class="sheet-bg checker" aria-hidden="true" />
       <div class="sheet-tint" aria-hidden="true" />
@@ -299,29 +328,69 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="scroll">
-        <div class="demo checker" aria-hidden="true">
-          <div class="demo-shell" :style="{ background: slotRgba(draft.surface) }" />
-          <div
-            class="demo-card"
-            :style="{
-              background: slotRgba(draft.card),
-              borderColor: draft.hairline,
-            }"
-          >
-            <span class="demo-title" :style="{ color: draft.onSurface }">
-              {{ t("theme.customSample.title") }}
-            </span>
-            <span class="demo-text" :style="{ color: draft.onSurfaceMuted }">
-              {{ t("theme.customSample.text") }}
-            </span>
-            <span
-              class="demo-chip"
-              :style="{ background: slotRgba(draft.inset), color: draft.primary }"
-            >
-              {{ t("theme.custom") }}
-            </span>
+        <section class="panel">
+          <label class="row field">
+            <span class="row-label">{{ t("theme.sampleTitle") }}</span>
+            <input
+              class="field-input"
+              type="text"
+              maxlength="40"
+              :value="draft.sampleTitle ?? ''"
+              :placeholder="t('theme.customSample.title')"
+              @input="setSample('sampleTitle', $event.target as HTMLInputElement)"
+              @change="commitSample('sampleTitle')"
+            />
+          </label>
+          <label class="row field">
+            <span class="row-label">{{ t("theme.sampleText") }}</span>
+            <input
+              class="field-input"
+              type="text"
+              maxlength="120"
+              :value="draft.sampleText ?? ''"
+              :placeholder="t('theme.customSample.text')"
+              @input="setSample('sampleText', $event.target as HTMLInputElement)"
+              @change="commitSample('sampleText')"
+            />
+          </label>
+        </section>
+
+        <section class="panel">
+          <div v-for="entry in TEXTS" :key="entry.key" class="row">
+            <span class="row-label">{{ t(entry.label) }}</span>
+            <input
+              class="swatch"
+              type="color"
+              :value="draft[entry.key].toLowerCase()"
+              :aria-label="t(entry.label)"
+              @input="setText(entry.key, $event.target as HTMLInputElement)"
+              @change="commitDraft"
+            />
           </div>
-        </div>
+          <div class="row">
+            <span class="row-label">{{ t("theme.hairline") }}</span>
+            <input
+              class="swatch"
+              type="color"
+              :value="draft.hairline.color.toLowerCase()"
+              :aria-label="t('theme.hairline')"
+              @input="setHairlineColor($event.target as HTMLInputElement)"
+              @change="commitDraft"
+            />
+            <input
+              class="alpha"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="draft.hairline.alpha"
+              :aria-label="`${t('theme.hairline')} ${draft.hairline.alpha}%`"
+              @input="setHairlineAlpha($event.target as HTMLInputElement)"
+              @change="commitDraft"
+            />
+            <span class="alpha-value">{{ draft.hairline.alpha }}%</span>
+          </div>
+        </section>
 
         <section class="panel">
           <div v-for="module in MODULES" :key="module.key" class="row">
@@ -346,20 +415,6 @@ onBeforeUnmount(() => {
               @change="commitDraft"
             />
             <span class="alpha-value">{{ draft[module.key].alpha }}%</span>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div v-for="entry in TEXTS" :key="entry.key" class="row">
-            <span class="row-label">{{ t(entry.label) }}</span>
-            <input
-              class="swatch"
-              type="color"
-              :value="draft[entry.key].toLowerCase()"
-              :aria-label="t(entry.label)"
-              @input="setText(entry.key, $event.target as HTMLInputElement)"
-              @change="commitDraft"
-            />
           </div>
         </section>
 
@@ -522,56 +577,16 @@ onBeforeUnmount(() => {
   padding-bottom: calc(var(--s-8) + var(--safe-bottom) + var(--ime));
 }
 
-.demo {
-  position: relative;
-  height: 132px;
-  border-radius: var(--r-md);
-  overflow: hidden;
-}
-
-.demo-shell {
-  position: absolute;
-  inset: 0;
-}
-
-.demo-card {
-  position: relative;
-  margin: var(--s-3);
-  max-width: 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: var(--s-3);
-  border: 1px solid;
-  border-radius: var(--r-sm);
-}
-
-.demo-title {
-  font-size: var(--t-small);
-  line-height: var(--t-small-lh);
-  font-weight: 600;
-}
-
-.demo-text {
-  font-size: var(--t-caption);
-  line-height: var(--t-caption-lh);
-}
-
-.demo-chip {
-  align-self: flex-start;
-  margin-top: var(--s-1);
-  padding: 2px 6px;
-  border-radius: var(--r-pill);
-  font-size: var(--t-caption);
-  line-height: var(--t-caption-lh);
-}
-
 .panel {
   margin-top: var(--s-4);
   border-radius: var(--r-md);
   background: var(--c-surface-1);
   border: 1px solid var(--c-hairline);
   overflow: hidden;
+}
+
+.panel:first-child {
+  margin-top: 0;
 }
 
 .row {
@@ -592,6 +607,36 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
   color: var(--c-on-surface);
+}
+
+.row.field {
+  gap: var(--s-3);
+}
+
+.row.field .row-label {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+.field-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding-inline: var(--s-2);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  color: var(--c-on-surface);
+  font-size: var(--t-small);
+}
+
+.field-input::placeholder {
+  color: var(--c-on-surface-faint);
+}
+
+.field-input:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 1px;
 }
 
 .swatch {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
-import { mdiArrowLeft, mdiPencil } from "@mdi/js";
+import { mdiArrowLeft, mdiPencil, mdiPlus } from "@mdi/js";
 import {
   activeCustomTheme,
   cloneCustomTheme,
@@ -48,7 +48,7 @@ function customCardStyle(theme: CustomTheme) {
   const active = isCustomActive(theme);
   return {
     background: slotRgba(theme.card),
-    borderColor: active ? theme.primary : theme.hairline,
+    borderColor: active ? theme.primary : slotRgba(theme.hairline),
     boxShadow: active ? `0 0 0 1px ${theme.primary}` : "none",
   };
 }
@@ -58,6 +58,37 @@ function customChipStyle(theme: CustomTheme) {
     ? { background: theme.primary, color: onPrimaryColor(theme.primary) }
     : { background: slotRgba(theme.inset), color: theme.primary };
 }
+
+// 新卡片照着当前已生效的主题画，外观与旁边那张卡一致，也预示会拷贝什么。
+const newCardLook = computed(() => {
+  const settings = session.settings;
+  const custom = settings.theme === "custom" ? activeCustomTheme(settings) : null;
+  if (custom) {
+    return {
+      checker: true,
+      preview: previewStyle(custom),
+      surface: slotRgba(custom.surface),
+      card: slotRgba(custom.card),
+      border: slotRgba(custom.hairline),
+      title: custom.onSurface,
+      text: custom.onSurfaceMuted,
+      btnBg: custom.primary,
+      btnColor: onPrimaryColor(custom.primary),
+    };
+  }
+  const option = themeOption(settings.theme);
+  return {
+    checker: false,
+    preview: {} as Record<string, string>,
+    surface: option.preview.surface,
+    card: option.preview.surface1,
+    border: option.preview.hairline,
+    title: option.preview.onSurface,
+    text: option.preview.onSurfaceMuted,
+    btnBg: option.preview.primary,
+    btnColor: option.preview.onPrimary,
+  };
+});
 
 async function createTheme() {
   customError.value = null;
@@ -89,6 +120,37 @@ async function pickCustom(theme: CustomTheme) {
   } catch (err) {
     customError.value = describeError(err);
   }
+}
+
+const LONG_PRESS_MS = 500;
+let pressTimer: number | null = null;
+let longPressed = false;
+
+function clearPress() {
+  if (pressTimer !== null) {
+    window.clearTimeout(pressTimer);
+    pressTimer = null;
+  }
+}
+
+function startPress(theme: CustomTheme, event: PointerEvent) {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  longPressed = false;
+  clearPress();
+  pressTimer = window.setTimeout(() => {
+    pressTimer = null;
+    longPressed = true;
+    void openSheet(theme);
+  }, LONG_PRESS_MS);
+}
+
+function onCustomClick(theme: CustomTheme) {
+  if (longPressed) {
+    longPressed = false;
+    return;
+  }
+  if (isCustomActive(theme)) void openSheet(theme);
+  else void pickCustom(theme);
 }
 
 async function openSheet(theme: CustomTheme) {
@@ -178,6 +240,8 @@ function goBack() {
   if (window.history.state?.back) router.back();
   else void router.push("/me");
 }
+
+onBeforeUnmount(clearPress);
 </script>
 
 <template>
@@ -280,33 +344,33 @@ function goBack() {
       </section>
 
       <section class="group">
-        <div class="group-head">
-          <h2 class="group-title">{{ t("theme.custom") }}</h2>
-          <button class="text-btn" type="button" @click="createTheme">
-            {{ t("theme.new") }}
-          </button>
-        </div>
-        <div v-if="customThemes.length" class="grid">
+        <h2 class="group-title">{{ t("theme.custom") }}</h2>
+        <div class="grid">
           <div
             v-for="(theme, index) in customThemes"
             :key="theme.id"
             class="custom-item"
           >
             <button
-              class="theme-card"
+              class="theme-card custom-card"
               type="button"
               :aria-pressed="isCustomActive(theme)"
               :aria-label="t('theme.customN', { n: index + 1 })"
-              @click="pickCustom(theme)"
+              @pointerdown="startPress(theme, $event)"
+              @pointerup="clearPress"
+              @pointerleave="clearPress"
+              @pointercancel="clearPress"
+              @contextmenu.prevent
+              @click="onCustomClick(theme)"
             >
               <span class="preview checker" :style="previewStyle(theme)" aria-hidden="true">
                 <span class="pv-surface" :style="surfaceStyle(theme)" />
                 <span class="pv-card" :style="customCardStyle(theme)">
                   <span class="pv-title" :style="{ color: theme.onSurface }">
-                    {{ t("theme.customSample.title") }}
+                    {{ theme.sampleTitle ?? t("theme.customSample.title") }}
                   </span>
                   <span class="pv-text" :style="{ color: theme.onSurfaceMuted }">
-                    {{ t("theme.customSample.text") }}
+                    {{ theme.sampleText ?? t("theme.customSample.text") }}
                   </span>
                   <span class="pv-foot">
                     <span class="pv-chip" :style="customChipStyle(theme)">
@@ -325,10 +389,45 @@ function goBack() {
                 </span>
               </span>
             </button>
-            <button class="text-btn" type="button" @click="openSheet(theme)">
-              {{ t("theme.edit") }}
-            </button>
           </div>
+          <button
+            class="theme-card"
+            type="button"
+            :aria-label="t('theme.newCard.title')"
+            @click="createTheme"
+          >
+            <span
+              class="preview"
+              :class="{ checker: newCardLook.checker }"
+              :style="newCardLook.checker ? newCardLook.preview : { background: newCardLook.surface }"
+              aria-hidden="true"
+            >
+              <span
+                v-if="newCardLook.checker"
+                class="pv-surface"
+                :style="{ background: newCardLook.surface }"
+              />
+              <span
+                class="pv-card"
+                :style="{ background: newCardLook.card, borderColor: newCardLook.border }"
+              >
+                <span class="pv-title" :style="{ color: newCardLook.title }">
+                  {{ t("theme.newCard.title") }}
+                </span>
+                <span class="pv-text" :style="{ color: newCardLook.text }">
+                  {{ t("theme.newCard.text") }}
+                </span>
+                <span class="pv-foot new-foot">
+                  <span
+                    class="pv-btn"
+                    :style="{ background: newCardLook.btnBg, color: newCardLook.btnColor }"
+                  >
+                    <Icon :path="mdiPlus" :size="10" />
+                  </span>
+                </span>
+              </span>
+            </span>
+          </button>
         </div>
         <p v-if="customError" class="error">{{ customError }}</p>
       </section>
@@ -406,14 +505,6 @@ function goBack() {
   margin-top: 0;
 }
 
-.group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-2);
-  margin-bottom: var(--s-2);
-}
-
 .group-title {
   font-size: var(--t-small);
   line-height: var(--t-small-lh);
@@ -421,10 +512,6 @@ function goBack() {
   font-weight: 500;
   letter-spacing: 0.04em;
   margin-bottom: var(--s-2);
-}
-
-.group-head .group-title {
-  margin-bottom: 0;
 }
 
 .grid {
@@ -454,8 +541,13 @@ function goBack() {
   width: 100%;
 }
 
-.custom-item .text-btn {
-  min-height: 32px;
+.custom-card {
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.pv-foot.new-foot {
+  justify-content: flex-end;
 }
 
 .preview {
@@ -532,15 +624,6 @@ function goBack() {
   height: 18px;
   border-radius: var(--r-pill);
   flex: none;
-}
-
-.text-btn {
-  display: inline-flex;
-  align-items: center;
-  color: var(--c-primary);
-  font-size: var(--t-small);
-  min-height: 36px;
-  padding-inline: var(--s-1);
 }
 
 .error {

@@ -93,7 +93,7 @@ export const useSession = defineStore("session", () => {
     style.setProperty("--c-on-surface", custom.onSurface);
     style.setProperty("--c-on-surface-muted", custom.onSurfaceMuted);
     style.setProperty("--c-primary", custom.primary);
-    style.setProperty("--c-hairline", custom.hairline);
+    style.setProperty("--c-hairline", slotRgba(custom.hairline));
     style.setProperty("--c-on-primary", onPrimaryColor(custom.primary));
     const background = themeBgUrl(custom.background);
     if (background) {

@@ -33,7 +33,9 @@ pub struct CustomTheme {
     pub on_surface: String,
     pub on_surface_muted: String,
     pub primary: String,
-    pub hairline: String,
+    pub hairline: ThemeSlot,
+    pub sample_title: Option<String>,
+    pub sample_text: Option<String>,
     pub background: Option<String>,
     pub font: Option<UiFont>,
 }
@@ -51,7 +53,9 @@ struct CustomThemeWire {
     on_surface: Option<String>,
     on_surface_muted: Option<String>,
     primary: Option<String>,
-    hairline: Option<String>,
+    hairline: Option<HairlineWire>,
+    sample_title: Option<String>,
+    sample_text: Option<String>,
     background: Option<String>,
     font: Option<UiFont>,
 }
@@ -69,8 +73,27 @@ impl Default for CustomThemeWire {
             on_surface_muted: None,
             primary: None,
             hairline: None,
+            sample_title: None,
+            sample_text: None,
             background: None,
             font: None,
+        }
+    }
+}
+
+// 描边早期只有色值字符串，读入时补成不透明的主题槽。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HairlineWire {
+    Slot(ThemeSlot),
+    Legacy(String),
+}
+
+impl From<HairlineWire> for ThemeSlot {
+    fn from(wire: HairlineWire) -> Self {
+        match wire {
+            HairlineWire::Slot(slot) => slot,
+            HairlineWire::Legacy(color) => Self { color, alpha: 100 },
         }
     }
 }
@@ -96,7 +119,12 @@ impl<'de> Deserialize<'de> for CustomTheme {
             on_surface: wire.on_surface.unwrap_or_else(|| text.into()),
             on_surface_muted: wire.on_surface_muted.unwrap_or_else(|| muted.into()),
             primary: wire.primary.unwrap_or_else(|| primary.into()),
-            hairline: wire.hairline.unwrap_or_else(|| hairline.into()),
+            hairline: wire.hairline.map(ThemeSlot::from).unwrap_or_else(|| ThemeSlot {
+                color: hairline.into(),
+                alpha: 100,
+            }),
+            sample_title: wire.sample_title,
+            sample_text: wire.sample_text,
             background: wire.background,
             font: wire.font,
         })
@@ -127,7 +155,12 @@ impl Default for CustomTheme {
             on_surface: on_surface.into(),
             on_surface_muted: on_surface_muted.into(),
             primary: primary.into(),
-            hairline: hairline.into(),
+            hairline: ThemeSlot {
+                color: hairline.into(),
+                alpha: 100,
+            },
+            sample_title: None,
+            sample_text: None,
             background: None,
             font: None,
         }
@@ -323,6 +356,25 @@ fn validate_font(font: &UiFont) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_sample_text(
+    label: &str,
+    value: Option<&String>,
+    max: usize,
+) -> Result<(), AppError> {
+    let Some(text) = value else {
+        return Ok(());
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("bad_setting", format!("自定义主题{label}不能为空")));
+    }
+    if trimmed.chars().count() > max {
+        return Err(AppError::new("bad_setting", format!("自定义主题{label}过长"))
+            .with_detail(format!("{} 字（上限 {max}）", trimmed.chars().count())));
+    }
+    Ok(())
+}
+
 fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
     if !safe_id(&theme.id) {
         return Err(AppError::new("bad_setting", "自定义主题 id 不合法")
@@ -332,18 +384,20 @@ fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
         ("onSurface", &theme.on_surface),
         ("onSurfaceMuted", &theme.on_surface_muted),
         ("primary", &theme.primary),
-        ("hairline", &theme.hairline),
     ] {
         if !hex_color_ok(color) {
             return Err(AppError::new("bad_setting", "自定义主题文字颜色不合法")
                 .with_detail(format!("{name}: {color}")));
         }
     }
+    validate_sample_text("标题", theme.sample_title.as_ref(), 40)?;
+    validate_sample_text("说明文字", theme.sample_text.as_ref(), 120)?;
     let slots = [
         ("surface", &theme.surface),
         ("card", &theme.card),
         ("inset", &theme.inset),
         ("scrim", &theme.scrim),
+        ("hairline", &theme.hairline),
     ];
     for (name, slot) in slots {
         if !hex_color_ok(&slot.color) {
@@ -570,20 +624,102 @@ mod tests {
             ("onSurface", "17181A"),
             ("onSurfaceMuted", "#56"),
             ("primary", "#XYZXYZ"),
-            ("hairline", ""),
         ] {
             let mut settings = with_custom("#F6F7F6", 100);
             match field {
                 "onSurface" => settings.custom_themes[0].on_surface = value.into(),
                 "onSurfaceMuted" => settings.custom_themes[0].on_surface_muted = value.into(),
-                "primary" => settings.custom_themes[0].primary = value.into(),
-                _ => settings.custom_themes[0].hairline = value.into(),
+                _ => settings.custom_themes[0].primary = value.into(),
             }
             assert!(
                 validate(&settings).is_err(),
                 "text color should be rejected: {field}"
             );
         }
+    }
+
+    #[test]
+    fn validates_hairline_slot() {
+        let mut settings = with_custom("#F6F7F6", 100);
+        settings.custom_themes[0].hairline = ThemeSlot {
+            color: "#E4E7E6".into(),
+            alpha: 35,
+        };
+        assert!(validate(&settings).is_ok());
+
+        settings.custom_themes[0].hairline.alpha = 0;
+        assert!(validate(&settings).is_ok());
+
+        settings.custom_themes[0].hairline.alpha = 101;
+        assert!(validate(&settings).is_err());
+
+        settings.custom_themes[0].hairline = ThemeSlot {
+            color: "E4E7E6".into(),
+            alpha: 50,
+        };
+        assert!(validate(&settings).is_err());
+
+        settings.custom_themes[0].hairline = ThemeSlot {
+            color: String::new(),
+            alpha: 50,
+        };
+        assert!(validate(&settings).is_err());
+    }
+
+    #[test]
+    fn reads_legacy_hairline_string_as_opaque() {
+        let mut conn = test_db();
+        insert_setting(&conn, "theme", json!("custom"));
+        insert_setting(
+            &conn,
+            "customThemes",
+            json!([{
+                "id": "theme-2",
+                "surface": { "color": "#101211", "alpha": 100 },
+                "card": { "color": "#181A19", "alpha": 100 },
+                "inset": { "color": "#0C0D0D", "alpha": 100 },
+                "scrim": { "color": "#000000", "alpha": 60 },
+                "onSurface": "#ECEEED",
+                "onSurfaceMuted": "#9BA29F",
+                "primary": "#5FC9B4",
+                "hairline": "#2A2F2D"
+            }]),
+        );
+
+        let settings = get_all(&conn).expect("read settings");
+        assert_eq!(
+            settings.custom_themes[0].hairline,
+            ThemeSlot {
+                color: "#2A2F2D".into(),
+                alpha: 100,
+            }
+        );
+
+        let stored = serde_json::to_value(&settings.custom_themes[0]).expect("serialize theme");
+        assert_eq!(
+            stored.get("hairline"),
+            Some(&json!({ "color": "#2A2F2D", "alpha": 100 }))
+        );
+
+        let next = patch(&mut conn, json!({ "language": "en" })).expect("patch settings");
+        assert_eq!(next.custom_themes[0].hairline.alpha, 100);
+    }
+
+    #[test]
+    fn preserves_hairline_alpha() {
+        let mut settings = with_custom("#F6F7F6", 100);
+        settings.custom_themes[0].hairline = ThemeSlot {
+            color: "#E4E7E6".into(),
+            alpha: 42,
+        };
+        let mut conn = test_db();
+        let next = patch(
+            &mut conn,
+            serde_json::to_value(&settings).expect("serialize settings"),
+        )
+        .expect("patch settings");
+        assert_eq!(next.custom_themes[0].hairline.color, "#E4E7E6");
+        assert_eq!(next.custom_themes[0].hairline.alpha, 42);
     }
 
     #[test]
@@ -624,6 +760,40 @@ mod tests {
     }
 
     #[test]
+    fn validates_sample_texts() {
+        let mut blank = with_custom("#F6F7F6", 100);
+        blank.custom_themes[0].sample_title = Some("   ".into());
+        assert!(validate(&blank).is_err());
+
+        let mut long_title = with_custom("#F6F7F6", 100);
+        long_title.custom_themes[0].sample_title = Some("字".repeat(41));
+        assert!(validate(&long_title).is_err());
+
+        let mut long_text = with_custom("#F6F7F6", 100);
+        long_text.custom_themes[0].sample_text = Some("字".repeat(121));
+        assert!(validate(&long_text).is_err());
+
+        let mut ok = with_custom("#F6F7F6", 100);
+        ok.custom_themes[0].sample_title = Some("我的主题".into());
+        ok.custom_themes[0].sample_text = Some("长按编辑该主题".into());
+        assert!(validate(&ok).is_ok());
+
+        let stored = serde_json::to_value(&ok.custom_themes[0]).expect("serialize theme");
+        assert_eq!(
+            stored.get("sampleTitle").and_then(|value| value.as_str()),
+            Some("我的主题")
+        );
+        assert_eq!(
+            stored.get("sampleText").and_then(|value| value.as_str()),
+            Some("长按编辑该主题")
+        );
+
+        let plain = serde_json::to_value(CustomTheme::default()).expect("serialize default theme");
+        assert!(plain["sampleTitle"].is_null());
+        assert!(plain["sampleText"].is_null());
+    }
+
+    #[test]
     fn legacy_base_only_seeds_missing_text_colors() {
         let conn = test_db();
         insert_setting(&conn, "theme", json!("custom"));
@@ -646,7 +816,8 @@ mod tests {
         assert_eq!(theme.on_surface, "#ECEEED");
         assert_eq!(theme.on_surface_muted, "#9BA29F");
         assert_eq!(theme.primary, "#ABCDEF");
-        assert_eq!(theme.hairline, "#2A2F2D");
+        assert_eq!(theme.hairline.color, "#2A2F2D");
+        assert_eq!(theme.hairline.alpha, 100);
 
         let stored = serde_json::to_value(theme).expect("serialize theme");
         assert!(stored.get("base").is_none());
@@ -684,7 +855,8 @@ mod tests {
         assert_eq!(migrated.custom_themes[0].on_surface, "#ECEEED");
         assert_eq!(migrated.custom_themes[0].on_surface_muted, "#9BA29F");
         assert_eq!(migrated.custom_themes[0].primary, "#5FC9B4");
-        assert_eq!(migrated.custom_themes[0].hairline, "#2A2F2D");
+        assert_eq!(migrated.custom_themes[0].hairline.color, "#2A2F2D");
+        assert_eq!(migrated.custom_themes[0].hairline.alpha, 100);
         assert_eq!(
             migrated.custom_themes[0]
                 .font

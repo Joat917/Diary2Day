@@ -26,7 +26,9 @@ export interface CustomTheme {
   onSurface: string;
   onSurfaceMuted: string;
   primary: string;
-  hairline: string;
+  hairline: ThemeSlot;
+  sampleTitle: string | null;
+  sampleText: string | null;
   background: string | null;
   font: UiFont | null;
 }

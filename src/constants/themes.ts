@@ -221,7 +221,9 @@ export function seedCustomTheme(option: ThemeOption, id = newCustomThemeId()): C
     onSurface: option.preview.onSurface,
     onSurfaceMuted: option.preview.onSurfaceMuted,
     primary: option.preview.primary,
-    hairline: option.preview.hairline,
+    hairline: { color: option.preview.hairline, alpha: 100 },
+    sampleTitle: null,
+    sampleText: null,
     background: null,
     font: null,
   };
@@ -237,7 +239,9 @@ export function cloneCustomTheme(source: CustomTheme, id = newCustomThemeId()): 
     onSurface: source.onSurface,
     onSurfaceMuted: source.onSurfaceMuted,
     primary: source.primary,
-    hairline: source.hairline,
+    hairline: { ...source.hairline },
+    sampleTitle: source.sampleTitle,
+    sampleText: source.sampleText,
     background: source.background,
     font: source.font ? { ...source.font } : null,
   };
