@@ -58,6 +58,12 @@ export const en = {
   "detail.retrySave": "Retry save",
   "detail.readOnly": "Preview only",
   "detail.readOnlyHint": "Older entries are read-only.",
+  "detail.exportImage": "Export as image",
+  "detail.exportImagePending": "Rendering image…",
+  "detail.exportImageDone": "Saved {name}",
+  "detail.exportAudio": "Audio",
+  "detail.exportVideo": "Video",
+  "detail.exportEmbed": "Embedded content",
 
   "viewer.zoomIn": "Zoom in",
   "viewer.zoomOut": "Zoom out",

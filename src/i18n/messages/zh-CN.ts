@@ -60,6 +60,12 @@ export const zhCN = {
   "detail.retrySave": "重试保存",
   "detail.readOnly": "仅预览",
   "detail.readOnlyHint": "过去的记录只能预览，不能再编辑。",
+  "detail.exportImage": "导出为图片",
+  "detail.exportImagePending": "正在生成图片…",
+  "detail.exportImageDone": "已导出 {name}",
+  "detail.exportAudio": "音频",
+  "detail.exportVideo": "视频",
+  "detail.exportEmbed": "嵌入内容",
 
   "viewer.zoomIn": "放大",
   "viewer.zoomOut": "缩小",

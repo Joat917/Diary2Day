@@ -2,6 +2,7 @@
 pub mod android_data;
 pub mod app;
 pub mod data;
+pub mod image;
 pub mod journal;
 pub mod lock;
 pub mod media;

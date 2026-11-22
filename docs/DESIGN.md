@@ -187,6 +187,8 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `backup_password_get` | → `password` 或 `null` | 读取本机记住的备份口令（`data_dir/backup-password.bin`，固定密钥加密，§6.5）；锁态返回 `locked` |
 | `backup_password_set` | `password?` → `void` | 写入或删除（`null`）记住的口令；该文件不进入备份包（§6.5） |
 | `data_import_md` | `dir` → `ImportReport{journals, assets}` | 桌面。与 export 对称（§6.4）；同一 `id` 按 upsert 处理。Android 走 `data_import_android` |
+| `image_export` | `target, data` → `u64` | 桌面。把笔记图片导出器产出的 base64 PNG 写到用户选定路径（`plugin-dialog` 的 `save` 先给 `target`）；校验 base64 与 PNG 魔数，失败 `bad_image`。字节仅在此跨一次 IPC（§6.7） |
+| `image_export_android` | `name, data` → `name` 或 `null` | Android。`save_file` 定位置后 `open_file_writable` 写入同一份 PNG；取消 `null`（§3.2、§6.7） |
 | `data_export_android` | → `ExportReport` 或 `null` | Android。`Picker::pick_dir` 选目标树，`cache/export` 暂存后逐文件写入 SAF；取消返回 `null`（§3.2） |
 | `data_import_android` | → `ImportReport` 或 `null` | Android。`pick_dir` → `cache/import` → 复用 `import_dir`；取消 `null` |
 | `data_backup_android` | `password?` → `BackupReport{path, size}` 或 `null` | Android。`save_file` 先定位置（无口令 `.zip` + `application/zip`，有口令 `.ddbak` + `application/octet-stream`），`cache/backup-out` 打包后写入 URI；`path` 是显示名而非绝对路径 |
@@ -235,6 +237,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 - **目录树**：复制递归走 `read_dir` + `create_dir_all_and_return_relative_path` + `create_new_file`；文件名先经 `safe_name` 去掉路径分隔符。
 - **命令装配**：全部 `#[cfg(target_os = "android")]`（`commands/android_data.rs`），桌面构建不编译；`generate_handler!` 里的对应条目同样带 `cfg`。前端按 `data_info.mobile` 选命令集，进度行、错误行、恢复确认与成功后重载的流程不变。
 - **分享出**：插件自带的 `Opener::share_file` / `share_files` 可把暂存文件交给系统分享面板。暂不单独做"分享条目"入口——后续导出加密时会弹出选择窗口，分享与保存两个按钮就放在那个窗口里，共用同一份暂存文件。
+- **单图保存不暂存**：笔记图片导出（§6.7）由 `image_export_android` 直接 `save_file` 拿 URI，解码 base64 后 `open_file_writable` 写入，不落 `cache/`；取消同样映射为 `null`。
 
 ---
 
@@ -341,6 +344,19 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 
 前端不引入原生插件桥：`App.vue` 在挂载、窗口聚焦、`visibilitychange` 可见、解锁，以及 Android 前台每 1.5s 调一次 `share_drain`；拿到 `id` 就 `router.push('/j/:id')` 打开新条目。桌面同样调用，只是收件箱通常为空。
 
+**6.7 笔记导出为图片**
+
+预览态顶栏的导出按钮走一条纯前端管线，条目数据不写库、不广播：
+
+1. **离屏渲染**：`exporting` 置真后挂载一段 `position: fixed; inset-inline-start: -10000px; width: 640px` 的 `.export-card`（日期行 + `.preview` 容器，背景 `--c-surface`）。`utils/notePreview.ts::renderNotePreview` 由屏幕预览与导出共用同一份 `Vditor.preview` 选项（主题跟随 `html[data-scheme]` 的明暗、`anchor: 0`），导出时强制 `lazyImages: false`。
+2. **等稳定**：`Vditor.preview` 的 promise 只等到 `md2html`，公式 / mermaid / hljs 都是异步补渲染；因此 `utils/noteImage.ts::waitForStable` 用 `MutationObserver` 观察 DOM，静默 250ms 才继续（4s 上限兜底），避免截到半张图。
+3. **替换媒体**：`<audio>` / `<video>` / `<iframe>` 在 `foreignObject` 里截不出内容，`replaceMediaElements`（异步）逐个换成静态块。音频建一个隐藏的 `<audio preload="metadata">` 读 `duration`，块内是类型标签 + 起点进度条 + `0:00 / 总时长`；视频用隐藏 `<video crossOrigin="anonymous">` 读时长后 seek 到 10%（上限 1s、下限 0.15s），`drawImage` 到 canvas 取一帧转 JPEG data URL 作封面，块内是 360px 高的封面（`object-fit: cover`）+ 居中播放标 + 右下角时长。`crossOrigin` 依赖 asset 协议回与窗口 origin 匹配的 ACAO，canvas 才不会被污染；元数据超时（4s）或编码不支持时降级成一行类型说明并 `console.warn` 完整错误，不阻断导出。`<iframe>` 仍是一行「嵌入内容 · 文件名」说明；音频与视频块不显示随机附件文件名。动态节点没有 scoped 的 `data-v` 属性，样式必须写成 `.export-card :deep(…)`。
+4. **内联图片**：`html-to-image` 走 SVG `foreignObject`，不能引用外部 URL。`inlineImages` 对每个非 `data:` 的 `<img>` 执行 `fetch(src)` → `FileReader` → data URL → `image.decode()`；正文图片是 asset 协议的 `convertFileSrc` 地址，读不到或解码失败按 `export_image` 抛出、detail 里保留源地址，**不静默换成占位**。这一环依赖各平台 WebView 对 asset 协议的 CORS 行为，必须真机验证。
+5. **截图**：`capturePng` 先看 `getBoundingClientRect().height`——0 报 `export_empty`，>16384 报 `export_too_long`（detail 带实际高度）；再等 `document.fonts.ready`，`pixelRatio = min(2, max(1, (16384-64)/height))`（短图 2 倍，长图自动降倍以免越界），背景取 `--c-surface`，调 `html-to-image` 的 `toPng`。
+6. **保存**：`data:` 之后的部分交给 Rust。桌面先 `plugin-dialog` 的 `save` 拿路径（默认 `Diary2Day-{day_key}.png`）再 `image_export`；Android 直接 `image_export_android` 走 `save_file`。Rust 只校验 base64 与 PNG 魔数（`bad_image`），写入后返回字节数 / 显示名。取消返回 `null`，前端不提示；失败按 §3.6 展示完整 code / message / detail。保存通道按 UA 里的 `Android/iOS` 分流，不调 `data_info`——那条命令会统计目录大小，不适合每次打开详情都跑一遍。
+
+**字节跨 IPC 的唯一例外**：PNG 由 WebView 画布生成，Rust 无法自己读，只能把 base64 传一次；媒体导入与其它文件 IO 仍走 asset 协议 / Rust 直读（§3.1、§3.2）。编辑态不提供导出（出图以预览排版为准），不进入导出流程就不重建预览，撤销栈、滚动位置与保存状态都不受影响。
+
 ---
 
 ## 7. Vditor：四条补丁 + 一笔样式预算
@@ -364,7 +380,7 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 
 **Rust**：`tauri@2` + `tauri-plugin-dialog` / `tauri-plugin-opener`、`arboard`（桌面剪贴板，仅非 Android 目标）、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset，本地偏移取 `chrono::Local`)、`base64`（游标）、`tokio`(随 tauri)、`sha2`(锁口令，SHA-256)、`zip`、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 开 `jpeg`/`png`/`webp`/`gif`/`bmp`，出缩略图用)、`argon2`(备份口令 KDF)、`chacha20poly1305`(XChaCha20-Poly1305)、`getrandom`(salt/nonce)、`zeroize`(派生密钥擦除)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
 
-**前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`vite`、`typescript`。月历与格子规格在 UI.md §3.2，自己实现；附件缩放（UI.md §3.10）用 pointer 事件与 `transform` 写在 `AssetViewer.vue` 里，不引 panzoom；日期显示走 `Intl`（§5）。
+**前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`html-to-image`(笔记导出图片，§6.7)、`vite`、`typescript`。月历与格子规格在 UI.md §3.2，自己实现；附件缩放（UI.md §3.10）用 pointer 事件与 `transform` 写在 `AssetViewer.vue` 里，不引 panzoom；日期显示走 `Intl`（§5）。
 
 CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`npm run build`（内部即 `vue-tsc --noEmit` + `vite build`）。计划中但尚未接线的：`ts-rs` 生成物 diff 校验、`vitest run`、`node scripts/check-style.mjs`；三平台 matrix 跑构建，测试全在 ubuntu runner 跑一遍。
 

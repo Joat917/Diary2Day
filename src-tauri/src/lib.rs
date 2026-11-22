@@ -61,6 +61,9 @@ pub fn run() {
             commands::data::data_restore,
             commands::data::backup_password_get,
             commands::data::backup_password_set,
+            commands::image::image_export,
+            #[cfg(target_os = "android")]
+            commands::android_data::image_export_android,
             #[cfg(target_os = "android")]
             commands::android_data::data_export_android,
             #[cfg(target_os = "android")]

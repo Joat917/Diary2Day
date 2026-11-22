@@ -576,3 +576,29 @@ fn restore_zip(state: &AppState, zip_path: &Path) -> Result<ImportReport, AppErr
         assets: asset_count,
     })
 }
+
+/// Decodes the base64 payload produced by the note-image exporter. The bytes come
+/// from the WebView canvas, so they cross IPC once per export; media import still
+/// goes through the asset protocol.
+pub fn decode_png(data: &str) -> Result<Vec<u8>, AppError> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    let bytes = STANDARD
+        .decode(data.trim())
+        .map_err(|err| AppError::new("bad_image", "图片数据无法解码").with_detail(err.to_string()))?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(AppError::new("bad_image", "图片数据不是 PNG"));
+    }
+    Ok(bytes)
+}
+
+pub fn write_image(target: &str, data: &str) -> Result<u64, AppError> {
+    let path = Path::new(target);
+    if target.trim().is_empty() || path.file_name().is_none() {
+        return Err(AppError::new("bad_target", "请选择有效的保存位置"));
+    }
+    let bytes = decode_png(data)?;
+    fs::write(path, &bytes)?;
+    Ok(bytes.len() as u64)
+}

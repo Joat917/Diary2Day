@@ -215,6 +215,40 @@ pub async fn data_backup_android(
 }
 
 #[tauri::command]
+pub async fn image_export_android(
+    state: State<'_, AppState>,
+    name: String,
+    data: String,
+) -> Result<Option<String>, AppError> {
+    let st = state.inner().clone();
+    run_blocking(st, move |state| {
+        let api = state.app.android_fs();
+        let file = safe_name(&name);
+        let file = if file.to_ascii_lowercase().ends_with(".png") {
+            file
+        } else {
+            format!("{file}.png")
+        };
+        let Some(uri) = api
+            .picker()
+            .save_file(None, &file, Some("image/png"), false)
+            .map_err(|err| android_err("无法打开保存对话框", err))?
+        else {
+            return Ok(None);
+        };
+
+        let bytes = export::decode_png(&data)?;
+        let mut out = api
+            .open_file_writable(&uri)
+            .map_err(|err| android_err("无法写入所选文件", err))?;
+        out.write_all(&bytes)?;
+        out.flush()?;
+        Ok(Some(api.get_name_or_last_path_segment(&uri)))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn data_pick_restore_android(
     state: State<'_, AppState>,
 ) -> Result<Option<PickedBackup>, AppError> {

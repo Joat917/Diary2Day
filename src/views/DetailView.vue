@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
-import Vditor from "vditor";
 import {
   mdiArrowLeft,
   mdiClose,
+  mdiImageOutline,
   mdiPencil,
   mdiPin,
   mdiPinOutline,
   mdiTrashCanOutline,
 } from "@mdi/js";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   assetGc,
   describeError,
+  imageExport,
+  imageExportAndroid,
   IpcError,
   journalDelete,
   journalGet,
@@ -25,7 +28,14 @@ import { useBreakpoint } from "../composables/useBreakpoint";
 import { useAutosave } from "../composables/useAutosave";
 import { useSession } from "../stores/session";
 import { diaryToday, formatRecordedAt, recordedAtNow } from "../utils/date";
-import { expandAssetUrls, isAssetSrc, referencedAssetNames } from "../utils/assetUrl";
+import { isAssetSrc, referencedAssetNames } from "../utils/assetUrl";
+import { renderNotePreview } from "../utils/notePreview";
+import {
+  capturePng,
+  inlineImages,
+  replaceMediaElements,
+  waitForStable,
+} from "../utils/noteImage";
 import AssetViewer from "../components/AssetViewer.vue";
 import EditorPane from "../components/EditorPane.vue";
 import Icon from "../components/Icon.vue";
@@ -55,6 +65,12 @@ const previewEl = ref<HTMLElement | null>(null);
 const editorWrapEl = ref<HTMLElement | null>(null);
 const editorPane = ref<InstanceType<typeof EditorPane> | null>(null);
 const viewerSrc = ref<string | null>(null);
+const exportCardEl = ref<HTMLElement | null>(null);
+const exportArticleEl = ref<HTMLElement | null>(null);
+const exporting = ref(false);
+const exportError = ref<string | null>(null);
+const exportNotice = ref<string | null>(null);
+const mobilePlatform = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 const embedded = computed(() => props.entryId != null);
 const entryId = computed(() => props.entryId ?? String(route.params.id ?? ""));
@@ -96,6 +112,10 @@ const readOnly = computed(() => {
   if (!item) return false;
   return item.day_key < diaryToday(session.settings.dayBoundaryMinutes);
 });
+
+const canExport = computed(
+  () => !!journal.value && !editing.value && content.value.trim() !== "",
+);
 
 async function persist(value: string) {
   try {
@@ -237,21 +257,16 @@ function onPreviewClick(event: MouseEvent) {
 function renderPreview() {
   const element = previewEl.value;
   if (!element) return;
-  element.innerHTML = "";
-  if (!content.value.trim()) return;
-  const dark = isDark();
-  element.classList.add("vditor-reset");
-  Vditor.preview(element as HTMLDivElement, expandAssetUrls(content.value), {
-    cdn: "/vditor",
-    mode: dark ? "dark" : "light",
-    theme: { current: dark ? "dark" : "light", path: "/vditor/dist/css/content-theme" },
-    hljs: { style: dark ? "native" : "github", lineNumber: false },
-    anchor: 0,
-    ...(session.settings.imageLazy ? { lazyLoadImage: "lazy" } : {}),
-  });
-  requestAnimationFrame(() => {
-    applyHighlight(queryText());
-  });
+  void renderNotePreview(element, content.value, {
+    dark: isDark(),
+    lazyImages: session.settings.imageLazy,
+  })
+    .then(() => {
+      requestAnimationFrame(() => applyHighlight(queryText()));
+    })
+    .catch((err) => {
+      console.error("[preview] render failed", err);
+    });
 }
 
 function queryText(): string {
@@ -326,6 +341,8 @@ async function load() {
   loading.value = true;
   missing.value = false;
   failReason.value = null;
+  exportError.value = null;
+  exportNotice.value = null;
   draftTags.value = [];
   draftMood.value = null;
   draftWeather.value = null;
@@ -394,6 +411,8 @@ function onEditorInput(value: string) {
 
 async function startEdit() {
   if (editing.value || !journal.value || readOnly.value) return;
+  exportError.value = null;
+  exportNotice.value = null;
   editing.value = true;
   pendingFocus.value = true;
   await nextTick();
@@ -419,6 +438,67 @@ async function leaveEdit() {
   if (!editing.value) return;
   editing.value = false;
   await gcAfterConfirmedSave();
+}
+
+function surfaceColor(): string {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue("--c-surface")
+    .trim();
+  return value || (isDark() ? "black" : "white");
+}
+
+function exportFileName(): string {
+  const key =
+    journal.value?.day_key ?? diaryToday(session.settings.dayBoundaryMinutes);
+  return `Diary2Day-${key}.png`;
+}
+
+async function savePng(dataUrl: string, fileName: string): Promise<string | null> {
+  const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  if (!data) throw new IpcError("export_empty", "生成的图片为空");
+  if (mobilePlatform) return imageExportAndroid(fileName, data);
+  const target = await saveDialog({
+    title: t("detail.exportImage"),
+    defaultPath: fileName,
+    filters: [{ name: "PNG", extensions: ["png"] }],
+  });
+  if (!target) return null;
+  await imageExport(target, data);
+  return target.split(/[\\/]/).pop() ?? target;
+}
+
+async function exportImage() {
+  if (!canExport.value || exporting.value) return;
+  exporting.value = true;
+  exportError.value = null;
+  exportNotice.value = null;
+  try {
+    await nextTick();
+    const card = exportCardEl.value;
+    const article = exportArticleEl.value;
+    if (!card || !article) throw new IpcError("export_empty", "导出区域未就绪");
+    await renderNotePreview(article, content.value, {
+      dark: isDark(),
+      lazyImages: false,
+    });
+    await waitForStable(card);
+    await replaceMediaElements(article, {
+      audio: t("detail.exportAudio"),
+      video: t("detail.exportVideo"),
+      embed: t("detail.exportEmbed"),
+    });
+    await inlineImages(article);
+    const dataUrl = await capturePng(card, surfaceColor());
+    // 探测音视频会拉长整个流程；页面若已离开，别再弹保存框。
+    if (!card.isConnected) return;
+    const saved = await savePng(dataUrl, exportFileName());
+    if (saved) exportNotice.value = t("detail.exportImageDone", { name: saved });
+  } catch (err) {
+    console.error(`[export] image failed: ${describeError(err)}`, err);
+    exportError.value = describeError(err);
+  } finally {
+    exporting.value = false;
+  }
 }
 
 function onDocumentPointerDown(event: PointerEvent) {
@@ -548,6 +628,16 @@ watch(
 
       <div class="actions">
         <button
+          v-if="canExport"
+          class="icon-btn"
+          type="button"
+          :aria-label="t('detail.exportImage')"
+          :disabled="exporting"
+          @click="exportImage"
+        >
+          <Icon :path="mdiImageOutline" :size="20" />
+        </button>
+        <button
           v-if="journal && !editing && !readOnly && isWide"
           class="icon-btn"
           type="button"
@@ -579,6 +669,9 @@ watch(
     </header>
 
     <p v-if="saveState === 'error' && saveError" class="save-detail">{{ saveError }}</p>
+    <p v-if="exporting" class="export-note">{{ t("detail.exportImagePending") }}</p>
+    <p v-else-if="exportError" class="save-detail">{{ exportError }}</p>
+    <p v-else-if="exportNotice" class="export-note">{{ exportNotice }}</p>
 
     <MetaChips
       v-if="showMeta"
@@ -644,6 +737,13 @@ watch(
 
     <AssetViewer :src="viewerSrc" @close="viewerSrc = null" />
 
+    <div v-if="exporting" class="export-stage" aria-hidden="true">
+      <div ref="exportCardEl" class="export-card">
+        <p class="export-date">{{ dateText }}</p>
+        <article ref="exportArticleEl" class="preview" />
+      </div>
+    </div>
+
     <ConfirmDialog
       :open="deleteOpen"
       :title="t('detail.deleteTitle')"
@@ -695,7 +795,7 @@ watch(
 }
 
 @media (hover: hover) {
-  .icon-btn:hover {
+  .icon-btn:hover:not(:disabled) {
     background: var(--c-surface-2);
   }
 }
@@ -785,6 +885,159 @@ watch(
   background: var(--c-hit);
   color: inherit;
   border-radius: 2px;
+}
+
+/* 离屏出图：固定在视口外，宽度固定，不参与滚动与交互。 */
+.export-stage {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline-start: -10000px;
+  width: 640px;
+  pointer-events: none;
+}
+
+.export-card {
+  width: 640px;
+  padding: var(--s-6);
+  background: var(--c-surface);
+  color: var(--c-on-surface);
+}
+
+.export-date {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-small);
+  line-height: var(--t-small-lh);
+  color: var(--c-on-surface-muted);
+}
+
+.export-card .preview {
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.export-card :deep(.export-media) {
+  margin: var(--s-3) 0;
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--c-surface-2);
+  color: var(--c-on-surface-muted);
+  font-size: var(--t-small);
+  line-height: var(--t-small-lh);
+}
+
+.export-card :deep(.export-embed) {
+  padding: var(--s-2) var(--s-3);
+}
+
+.export-card :deep(.export-media__caption) {
+  padding: var(--s-1) var(--s-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.export-card :deep(.export-media__frame) {
+  position: relative;
+  height: 360px;
+  background: var(--c-surface-1);
+}
+
+.export-card :deep(.export-media__cover) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.export-card :deep(.export-media__play) {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--c-on-surface);
+  color: var(--c-surface);
+}
+
+.export-card :deep(.export-media__play svg) {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+}
+
+.export-card :deep(.export-media__duration) {
+  position: absolute;
+  inset-block-end: var(--s-2);
+  inset-inline-end: var(--s-2);
+  padding: 1px var(--s-1);
+  border-radius: var(--r-pill);
+  background: var(--c-on-surface);
+  color: var(--c-surface);
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-card :deep(.export-audio) {
+  padding-block-end: var(--s-2);
+}
+
+.export-card :deep(.export-audio .export-media__caption) {
+  padding-block-end: var(--s-1);
+}
+
+.export-card :deep(.export-audio__row) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-inline: var(--s-3);
+}
+
+.export-card :deep(.export-audio__bar) {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-1);
+}
+
+.export-card :deep(.export-audio__knob) {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 0;
+  width: 10px;
+  height: 10px;
+  margin-block-start: -5px;
+  border-radius: 50%;
+  background: var(--c-primary);
+}
+
+.export-card :deep(.export-audio__time) {
+  flex: none;
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-note {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-hairline);
+  background: var(--c-surface-2);
+  color: var(--c-on-surface-muted);
+  font-size: var(--t-caption);
+  line-height: var(--t-caption-lh);
 }
 
 .hint {

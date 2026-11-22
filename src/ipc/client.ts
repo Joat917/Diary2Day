@@ -227,6 +227,10 @@ export function backupPasswordSet(password: string | null): Promise<void> {
   return call("backup_password_set", { password: password ?? null });
 }
 
+export function imageExport(target: string, data: string): Promise<number> {
+  return call("image_export", { target, data });
+}
+
 export function dataExportAndroid(): Promise<ExportReport | null> {
   return call("data_export_android");
 }
@@ -237,6 +241,10 @@ export function dataImportAndroid(): Promise<ImportReport | null> {
 
 export function dataBackupAndroid(password?: string | null): Promise<BackupReport | null> {
   return call("data_backup_android", { password: password ?? null });
+}
+
+export function imageExportAndroid(name: string, data: string): Promise<string | null> {
+  return call("image_export_android", { name, data });
 }
 
 export function dataPickRestoreAndroid(): Promise<PickedBackup | null> {
