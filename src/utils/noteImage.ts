@@ -45,6 +45,48 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+interface InlineFacts {
+  status?: number;
+  responseType?: string;
+  contentType?: string | null;
+  contentLength?: string | null;
+  blobType?: string;
+  blobSize?: number;
+  dataUrl?: string;
+}
+
+function dataUrlHead(dataUrl: string): string {
+  const comma = dataUrl.indexOf(",");
+  const end = comma < 0 ? Math.min(dataUrl.length, 40) : Math.min(comma + 1, 60);
+  return `${dataUrl.slice(0, end)}${dataUrl.length > end ? "…" : ""}`;
+}
+
+// 真机上只看一个 URL 无法判断失败在哪一步，把下载和解码两条路径的中间结果都摊开。
+function describeInline(stage: string, src: string, facts: InlineFacts): string {
+  const lines = [`阶段: ${stage}`, `URL: ${src}`];
+  if (facts.status !== undefined) lines.push(`HTTP 状态: ${facts.status}`);
+  if (facts.responseType) lines.push(`响应类型: ${facts.responseType}`);
+  if (facts.contentType !== undefined) lines.push(`Content-Type: ${facts.contentType || "(无)"}`);
+  if (facts.contentLength !== undefined) lines.push(`Content-Length: ${facts.contentLength || "(无)"}`);
+  if (facts.blobType !== undefined) lines.push(`Blob 类型: ${facts.blobType || "(空)"}`);
+  if (facts.blobSize !== undefined) lines.push(`Blob 大小: ${facts.blobSize} 字节`);
+  if (facts.dataUrl !== undefined) {
+    lines.push(`Data URL: ${facts.dataUrl.length} 字符，前缀 ${dataUrlHead(facts.dataUrl)}`);
+  }
+  return lines.join("\n");
+}
+
+async function probeImage(label: string, src: string): Promise<string> {
+  const probe = new Image();
+  probe.src = src;
+  try {
+    await probe.decode();
+    return `${label}: 成功 (${probe.naturalWidth}×${probe.naturalHeight})`;
+  } catch (err) {
+    return `${label}: 失败 (${describeError(err)})`;
+  }
+}
+
 // foreignObject 不能引用外部资源：图片必须先变成 data URL，否则截出来是空白。
 export async function inlineImages(root: HTMLElement): Promise<void> {
   const images = [...root.querySelectorAll("img")];
@@ -52,26 +94,46 @@ export async function inlineImages(root: HTMLElement): Promise<void> {
     images.map(async (image) => {
       const src = image.getAttribute("src") ?? "";
       if (!src || src.startsWith("data:")) return;
-      let blob: Blob;
+      const facts: InlineFacts = {};
+      let stage = "下载图片";
+      let dataUrl: string;
       try {
         const response = await fetch(src);
+        facts.status = response.status;
+        facts.responseType = response.type;
+        facts.contentType = response.headers.get("content-type");
+        facts.contentLength = response.headers.get("content-length");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        blob = await response.blob();
+        stage = "转换为 Data URL";
+        const blob = await response.blob();
+        facts.blobType = blob.type;
+        facts.blobSize = blob.size;
+        dataUrl = await blobToDataUrl(blob);
+        facts.dataUrl = dataUrl;
       } catch (err) {
         throw new IpcError(
           "export_image",
           "无法读取正文里的图片",
-          `${describeError(err)}\n${src}`,
+          `${describeInline(stage, src, facts)}\n${describeError(err)}`,
         );
       }
-      image.src = await blobToDataUrl(blob);
+      image.src = dataUrl;
       try {
         await image.decode();
       } catch (err) {
+        const probes = await Promise.all([
+          probeImage("独立 Image（Data URL）", dataUrl),
+          probeImage("独立 Image（原始地址）", src),
+        ]);
         throw new IpcError(
           "export_image",
           "图片无法解码",
-          `${describeError(err)}\n${src}`,
+          [
+            describeInline("设置 Data URL 后解码", src, facts),
+            `元素状态: complete=${image.complete}，尺寸 ${image.naturalWidth}×${image.naturalHeight}`,
+            ...probes,
+            describeError(err),
+          ].join("\n"),
         );
       }
     }),
@@ -396,5 +458,14 @@ export async function capturePng(card: HTMLElement, background: string): Promise
     );
   }
   const pixelRatio = Math.min(2, Math.max(1, (MAX_EDGE - 64) / height));
-  return toPng(card, { backgroundColor: background, pixelRatio });
+  try {
+    return await toPng(card, { backgroundColor: background, pixelRatio });
+  } catch (err) {
+    const width = Math.ceil(card.getBoundingClientRect().width);
+    throw new IpcError(
+      "export_image",
+      "生成图片失败",
+      `卡片 ${width}×${height}px，pixelRatio ${pixelRatio}\n${describeError(err)}`,
+    );
+  }
 }
