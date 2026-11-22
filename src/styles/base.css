@@ -112,3 +112,48 @@ html[data-motion="reduced"] *::after {
   animation-duration: 0ms !important;
   transition-duration: 0ms !important;
 }
+
+/* 自定义主题：方格/背景图固定在视口最底层，.app 的页面底色叠在它上面，带透明度时透出底层。 */
+html[data-theme="custom"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background-color: var(--c-checker-a);
+  background-image:
+    var(--c-theme-bg, none),
+    conic-gradient(
+      var(--c-checker-a) 90deg,
+      var(--c-checker-b) 90deg 180deg,
+      var(--c-checker-a) 180deg 270deg,
+      var(--c-checker-b) 270deg
+    );
+  background-size: cover, 48px 48px;
+  background-position: center;
+  background-repeat: no-repeat, repeat;
+}
+
+/* 导出与锁屏按四组底色的 100% 不透明度压平，且不显示背景层。 */
+html[data-theme="custom"] .export-card,
+html[data-theme="custom"] .lock {
+  --c-surface: var(--c-surface-flat);
+  --c-surface-1: var(--c-surface-1-flat);
+  --c-surface-2: var(--c-surface-2-flat);
+  --c-scrim: var(--c-scrim-flat);
+}
+
+.checker {
+  background-color: var(--c-checker-a);
+  background-image:
+    var(--c-theme-bg, none),
+    conic-gradient(
+      var(--c-checker-a) 90deg,
+      var(--c-checker-b) 90deg 180deg,
+      var(--c-checker-a) 180deg 270deg,
+      var(--c-checker-b) 270deg
+    );
+  background-size: cover, 48px 48px;
+  background-position: center;
+  background-repeat: no-repeat, repeat;
+}

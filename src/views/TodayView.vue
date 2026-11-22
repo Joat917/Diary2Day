@@ -513,6 +513,10 @@ onBeforeUnmount(() => {
   background: var(--c-surface);
 }
 
+html[data-theme="custom"] .topbar {
+  background: transparent;
+}
+
 .view.wide .topbar {
   border-bottom: 1px solid var(--c-hairline);
 }

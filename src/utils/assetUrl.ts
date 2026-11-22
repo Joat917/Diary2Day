@@ -28,6 +28,8 @@ const LEGACY_PREFIX = "http://ddasset.localhost/";
 let assetsHref = "";
 let thumbsHref = "";
 let exportHref = "";
+let themeHref = "";
+let fontsHref = "";
 
 function fileSrc(path: string): string {
   // The app data dir can contain parentheses; keep them encoded so they stay
@@ -47,6 +49,8 @@ export function setAssetBase(dir: string | null | undefined): void {
     assetsHref = "";
     thumbsHref = "";
     exportHref = "";
+    themeHref = "";
+    fontsHref = "";
     return;
   }
   const sep = root.includes("\\") ? "\\" : "/";
@@ -54,6 +58,8 @@ export function setAssetBase(dir: string | null | undefined): void {
   assetsHref = fileSrc(base);
   thumbsHref = fileSrc(`${base}.thumbs${sep}`);
   exportHref = fileSrc(`${base}.export${sep}`);
+  themeHref = fileSrc(`${base}theme${sep}`);
+  fontsHref = fileSrc(`${base}fonts${sep}`);
 }
 
 export function assetUrl(kind: "image" | "audio" | "video" | "t", name: string): string | null {
@@ -82,6 +88,16 @@ export function assetNameFromSrc(src: string): string | null {
 
 export function exportViewUrl(view: string): string | null {
   return exportHref ? `${exportHref}${view}` : null;
+}
+
+export function themeBgUrl(name: string | null | undefined): string | null {
+  if (!name || !themeHref) return null;
+  return `${themeHref}${name}`;
+}
+
+export function fontFileUrl(name: string | null | undefined): string | null {
+  if (!name || !fontsHref) return null;
+  return `${fontsHref}${name}`;
 }
 
 export function assetMarkdown(name: string, kind: AssetUiKind): string {

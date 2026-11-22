@@ -33,6 +33,7 @@ import { isAssetSrc, referencedAssetNames } from "../utils/assetUrl";
 import { renderNotePreview } from "../utils/notePreview";
 import {
   capturePng,
+  embedFontCss,
   inlineImages,
   prepareExportImages,
   replaceMediaElements,
@@ -445,9 +446,9 @@ async function leaveEdit() {
 }
 
 function surfaceColor(): string {
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue("--c-surface")
-    .trim();
+  const style = getComputedStyle(document.documentElement);
+  const flat = style.getPropertyValue("--c-surface-flat").trim();
+  const value = flat || style.getPropertyValue("--c-surface").trim();
   return value || (isDark() ? "black" : "white");
 }
 
@@ -531,12 +532,13 @@ async function exportImage() {
     });
     await prepareExportImages(article, session.settings.exportWidth);
     await inlineImages(article);
+    const fontCss = session.settings.uiFont ? await embedFontCss(card) : undefined;
     const chunks = splitExportChunks(card, stage, (index, total) =>
       `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,
     );
     const images: string[] = [];
     for (const chunk of chunks) {
-      images.push(await capturePng(chunk, surfaceColor()));
+      images.push(await capturePng(chunk, surfaceColor(), fontCss));
     }
     // 探测音视频与逐张出图会拉长整个流程；页面若已离开，别再弹保存框。
     if (!chunks[0].isConnected) return;
@@ -837,6 +839,10 @@ watch(
   padding: var(--s-2) var(--s-3);
   border-bottom: 1px solid var(--c-hairline);
   background: var(--c-surface);
+}
+
+html[data-theme="custom"] .topbar {
+  background: transparent;
 }
 
 .icon-btn {

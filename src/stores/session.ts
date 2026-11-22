@@ -1,8 +1,9 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { settingsGetAll, settingsPatch } from "../ipc/client";
-import type { Settings, Theme } from "../ipc/types";
-import { isDarkTheme } from "../constants/themes";
+import type { CustomTheme, Settings, Theme, ThemeSlot } from "../ipc/types";
+import { isDarkTheme, slotRgba } from "../constants/themes";
+import { fontFileUrl, themeBgUrl } from "../utils/assetUrl";
 import { setLocale } from "../i18n";
 
 const defaults: Settings = {
@@ -20,7 +21,26 @@ const defaults: Settings = {
   cardTime: "recorded",
   autoEdit: true,
   exportWidth: 640,
+  customTheme: null,
+  uiFont: null,
 };
+
+const FONT_STYLE_ID = "dd-ui-font";
+const MODULE_VARS = ["--c-surface", "--c-surface-1", "--c-surface-2", "--c-scrim"] as const;
+
+let baseFontBody: string | null = null;
+let probedBackground: string | null = null;
+
+// CSS 背景图加载失败不会抛错，这里探一次，缺失文件时留下带源地址的告警。
+function probeBackground(url: string, name: string) {
+  if (probedBackground === url) return;
+  probedBackground = url;
+  const probe = new Image();
+  probe.onerror = () => {
+    console.warn("[theme] background image failed to load", name, url);
+  };
+  probe.src = url;
+}
 
 export const useSession = defineStore("session", () => {
   const settings = ref<Settings>({ ...defaults });
@@ -36,12 +56,85 @@ export const useSession = defineStore("session", () => {
     return (next.theme as string) === "system" ? { ...next, theme: autoTheme() } : next;
   }
 
+  function applyCustomVars(custom: CustomTheme | null) {
+    const style = document.documentElement.style;
+    if (!custom) {
+      for (const name of MODULE_VARS) {
+        style.removeProperty(name);
+        style.removeProperty(`${name}-flat`);
+      }
+      style.removeProperty("--c-theme-bg");
+      return;
+    }
+    const slots: [string, ThemeSlot][] = [
+      ["--c-surface", custom.surface],
+      ["--c-surface-1", custom.card],
+      ["--c-surface-2", custom.inset],
+      ["--c-scrim", custom.scrim],
+    ];
+    for (const [name, slot] of slots) {
+      style.setProperty(name, slotRgba(slot));
+      style.setProperty(`${name}-flat`, slot.color);
+    }
+    const background = themeBgUrl(custom.background);
+    if (background) {
+      style.setProperty("--c-theme-bg", `url("${background}")`);
+      probeBackground(background, custom.background ?? "");
+    } else {
+      style.removeProperty("--c-theme-bg");
+    }
+  }
+
+  function applyFont() {
+    const root = document.documentElement;
+    const font = settings.value.uiFont;
+    let element = document.getElementById(FONT_STYLE_ID) as HTMLStyleElement | null;
+    if (!font) {
+      element?.remove();
+      root.style.removeProperty("--font-body");
+      return;
+    }
+    // 资产目录尚未就绪时先跳过，setAssetBase 之后会再跑一次 applyTheme。
+    const url = fontFileUrl(font.name);
+    if (!url) return;
+    if (baseFontBody === null) {
+      baseFontBody =
+        getComputedStyle(root).getPropertyValue("--font-body").trim() ||
+        "system-ui, sans-serif";
+    }
+    if (!element) {
+      element = document.createElement("style");
+      element.id = FONT_STYLE_ID;
+      document.head.append(element);
+    }
+    element.textContent = `@font-face{font-family:"DD-UI";src:url("${url}");font-display:swap;}`;
+    root.style.setProperty("--font-body", `"DD-UI", ${baseFontBody}`);
+    document.fonts.load('1em "DD-UI"').catch((error: unknown) => {
+      console.error("[font] custom UI font failed to load", url, error);
+    });
+  }
+
   function applyTheme() {
-    const theme = settings.value.theme;
+    const current = settings.value;
+    const theme = current.theme;
+    const custom = theme === "custom" ? current.customTheme : null;
     document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.scheme = isDarkTheme(theme) ? "dark" : "light";
-    document.documentElement.dataset.motion = settings.value.reduceMotion ? "reduced" : "full";
-    setLocale(settings.value.language);
+    document.documentElement.dataset.scheme =
+      theme === "custom"
+        ? (custom?.base ?? "light")
+        : isDarkTheme(theme)
+          ? "dark"
+          : "light";
+    document.documentElement.dataset.motion = current.reduceMotion ? "reduced" : "full";
+    applyCustomVars(custom);
+    applyFont();
+    setLocale(current.language);
+  }
+
+  // 编辑层拖动中的临时外观：只改根节点，不写库；关闭编辑层后再 applyTheme() 回到已存值。
+  function previewCustom(custom: CustomTheme) {
+    document.documentElement.dataset.scheme = custom.base;
+    applyCustomVars(custom);
   }
 
   async function load() {
@@ -71,5 +164,5 @@ export const useSession = defineStore("session", () => {
     applyTheme();
   }
 
-  return { settings, ready, load, patch, applyTheme };
+  return { settings, ready, load, patch, applyTheme, previewCustom };
 });

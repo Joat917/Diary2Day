@@ -218,6 +218,10 @@ onBeforeUnmount(() => {
   background: var(--c-surface);
 }
 
+html[data-theme="custom"] .topbar {
+  background: transparent;
+}
+
 .heading {
   font-size: var(--t-display);
   line-height: var(--t-display-lh);

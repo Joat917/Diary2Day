@@ -183,6 +183,11 @@ const activeIndex = computed(() =>
   background: var(--c-surface);
 }
 
+/* 自定义主题的页面底色已由 .app 铺满，侧栏再铺一层会让透明度叠两次。 */
+html[data-theme="custom"] .rail {
+  background: transparent;
+}
+
 .brand {
   font-size: var(--t-title);
   line-height: var(--t-title-lh);

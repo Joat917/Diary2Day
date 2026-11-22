@@ -10,6 +10,7 @@ import type {
   DayMark,
   ExportReport,
   ExportView,
+  FontInfo,
   ImportReport,
   Journal,
   JournalPage,
@@ -20,6 +21,7 @@ import type {
   Settings,
   ShareReport,
   Tag,
+  ThemeBackground,
 } from "./types";
 
 export class IpcError extends Error {
@@ -316,6 +318,22 @@ export function settingsGetAll(): Promise<Settings> {
 
 export function settingsPatch(patch: Partial<Settings>): Promise<Settings> {
   return call("settings_patch", { patch });
+}
+
+export function fontImport(): Promise<FontInfo | null> {
+  return call("font_import");
+}
+
+export function fontRemove(name: string): Promise<void> {
+  return call("font_remove", { name });
+}
+
+export function themeBgImport(): Promise<ThemeBackground | null> {
+  return call("theme_bg_import");
+}
+
+export function themeBgRemove(name: string): Promise<void> {
+  return call("theme_bg_remove", { name });
 }
 
 export function dataInfo(): Promise<DataInfo> {

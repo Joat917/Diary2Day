@@ -6,10 +6,41 @@ export type Theme =
   | "dark"
   | "midnight"
   | "mocha"
-  | "forest";
+  | "forest"
+  | "custom";
 export type DateFormat = "slash" | "short" | "zh";
 export type LocaleCode = "zh-CN" | "en";
 export type CardTime = "recorded" | "updated";
+export type ThemeBase = "light" | "dark";
+
+export interface ThemeSlot {
+  color: string;
+  alpha: number;
+}
+
+export interface CustomTheme {
+  base: ThemeBase;
+  surface: ThemeSlot;
+  card: ThemeSlot;
+  inset: ThemeSlot;
+  scrim: ThemeSlot;
+  background: string | null;
+}
+
+export interface UiFont {
+  name: string;
+  label: string;
+}
+
+export interface FontInfo extends UiFont {
+  format: "ttf" | "otf" | "woff" | "woff2";
+}
+
+export interface ThemeBackground {
+  name: string;
+  width: number;
+  height: number;
+}
 
 export interface Settings {
   theme: Theme;
@@ -26,6 +57,8 @@ export interface Settings {
   cardTime: CardTime;
   autoEdit: boolean;
   exportWidth: number;
+  customTheme: CustomTheme | null;
+  uiFont: UiFont | null;
 }
 
 export interface Tag {

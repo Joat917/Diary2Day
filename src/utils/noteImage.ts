@@ -1,4 +1,4 @@
-import { toPng } from "html-to-image";
+import { getFontEmbedCSS, toPng } from "html-to-image";
 import { assetExportViews, describeError, IpcError } from "../ipc/client";
 import { assetNameFromSrc, exportViewUrl } from "./assetUrl";
 
@@ -473,7 +473,11 @@ export function splitExportChunks(
   return chunks;
 }
 
-export async function capturePng(card: HTMLElement, background: string): Promise<string> {
+export async function capturePng(
+  card: HTMLElement,
+  background: string,
+  fontEmbedCSS?: string,
+): Promise<string> {
   await document.fonts.ready;
   const height = Math.ceil(card.getBoundingClientRect().height);
   if (height <= 0) throw new IpcError("export_empty", "没有可导出的内容");
@@ -486,7 +490,7 @@ export async function capturePng(card: HTMLElement, background: string): Promise
   }
   const pixelRatio = Math.min(2, Math.max(1, (MAX_EDGE - 64) / height));
   try {
-    return await toPng(card, { backgroundColor: background, pixelRatio });
+    return await toPng(card, { backgroundColor: background, pixelRatio, fontEmbedCSS });
   } catch (err) {
     const width = Math.ceil(card.getBoundingClientRect().width);
     throw new IpcError(
@@ -494,5 +498,14 @@ export async function capturePng(card: HTMLElement, background: string): Promise
       "生成图片失败",
       `卡片 ${width}×${height}px，pixelRatio ${pixelRatio}\n${describeError(err)}`,
     );
+  }
+}
+
+// 自定义字体只取一次内联 CSS，所有分段共用；取不到就按 export_image 报错，不静默换字体。
+export async function embedFontCss(card: HTMLElement): Promise<string> {
+  try {
+    return await getFontEmbedCSS(card);
+  } catch (err) {
+    throw new IpcError("export_image", "字体无法内联到导出图片", describeError(err));
   }
 }

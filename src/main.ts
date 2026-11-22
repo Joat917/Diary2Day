@@ -107,6 +107,8 @@ void (async () => {
     if (isTauri()) {
       const paths = await assetPaths();
       setAssetBase(paths.assets_dir);
+      // 自定义背景图与字体依赖资产地址，拿到目录后重跑一次外观。
+      session.applyTheme();
     }
   } catch (error) {
     console.error("[boot] startup failed", error);

@@ -174,7 +174,11 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `search_query` | `text from? to? tag_id? mood? limit` → `SearchPage{items, partial}` | 空 `text` 走同一 `journal_list` 路径（§6.3）。UI 目前只传 `text` 与 `tag_id`；`from` / `mood` 留给将来的"高级搜索"（PRD §2.5），不预埋界面。`partial=true` 时 UI 显示"结果可能不完整" |
 | `tag_list` / `tag_create` / `tag_rename` / `tag_delete` / `tag_merge` | 常规 | create/rename 按 `name_key` 查重，冲突返回 `code=tag_exists` |
 | `settings_get_all` | → `Settings` | 一次拿全量，前端启动时缓存（§5） |
-| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed` |
+| `settings_patch` | `Partial<Settings>` → `Settings` | 服务端校验后回全量，前端覆盖缓存。改 `dayBoundaryMinutes` 时同事务重排全部 `day_key`（含回收站）并重建 `day_mark`（§2.2），随后 emit `dd://settings-changed`。`customTheme` / `uiFont` 走同一 `validate()`：色值 `#RRGGBB`、透明度 0–100、基色 `light`/`dark`、文件名合法（§6.8） |
+| `font_import` | → `FontInfo{name, label, format}` 或 `null` | 打开系统字体选择器（桌面按扩展名过滤，Android SAF 后由 Rust 校验）。魔数只收 ttf / otf / woff / woff2，拒绝 `.ttc` 集合；≤10MB；随机名复制到 `assets/fonts/`。取消 `null`；不写设置，前端随后 `settings_patch`；锁态 `locked`（§6.8） |
+| `font_remove` | `name` → unit | 删除 `assets/fonts/` 下的字体文件；`name` 先按合法字体文件名校验（防路径穿越）；先写设置成功再删旧文件，避免删掉正在用的字体（§6.8） |
+| `theme_bg_import` | → `ThemeBackground{name, width, height}` 或 `null` | 打开图片选择器；按 EXIF 拍平后长边缩到 ≤2560（不放大），存为 `assets/theme/{随机}.jpg`（质量 82。`image` 的 WebP 编码器只有无损模式，不为此加依赖）。取消 `null`；不写设置；锁态 `locked`（§6.8） |
+| `theme_bg_remove` | `name` → unit | 删除 `assets/theme/` 下的背景图；`name` 同样先校验；先写设置再删文件（§6.8） |
 | `stats_overview` | → `Stats` | 全走聚合 + `day_mark` |
 | `media_pick_import` | → `Asset[]` | 打开系统选择器后由 Rust 直接读取选中文件：桌面用 `dialog` 插件，Android 用 SAF `Picker::pick_files`。取消返回空数组；只回元数据，字节不过 IPC。按 64 KiB 分块边读边写，内存不随文件增长；图片抽尺寸并产出缩略图（§3.1） |
 | `media_paste_import` | → `Asset[]` | 桌面由 Rust 读系统剪贴板（`arboard`）：文件列表按路径导入，图片编码成 PNG 再导入；Android 返回 `paste_media_unsupported`，提示改用附件按钮 |
@@ -230,6 +234,8 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 **卡片用哪张图**：`asset` 与 `journal` 保持零关联（PRD §2.4）。卡片取 `journal.asset_n` / `audio_n` / `video_n` 三个分类计数与 `journal.cover_asset`，在 save 事务里和 `words`、派生 title 一起从正文按 `ddasset://{kind}/` 前缀扫出；正文变了它们就跟着变，没有额外的全表重建命令。
 
+**主题与字体不是附件**：自定义背景图与导入字体分别落 `assets/theme/`、`assets/fonts/`。两者都是非隐藏目录，现有 `allow_directory(assets_dir, true)` 已覆盖，不需要额外放行；备份递归包含 `assets/`、恢复按相对路径写回；手动“清理未使用附件”只检查 `assets_dir` 顶层的媒体文件名，不会碰这两个子目录。删改由 `font_remove` / `theme_bg_remove` 显式执行，不做引用计数。
+
 ### 3.2 Android 文件 IO 走 SAF 插件，字节只在 Rust 侧搬运
 
 Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开，`plugin-dialog` 也拿不到目标目录。因此移动端的导出 / 导入 / 备份 / 恢复由 `tauri-plugin-android-fs`（`=30.2.0`，只在 `[target.'cfg(target_os = "android")'.dependencies]` 下引入）承担；不为文件 IO 写自定义 Kotlin 插件。
@@ -259,9 +265,9 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 
 ## 5. 前端形态
 
-**路由**：`vue-router`，5 条平铺路由 `/today`、`/discover`、`/me`、`/theme`、`/j/:id`。分界线一句话：**换"页"走路由，叠"层"走状态**——整月视图、附件大图、文件选择器、确认框都挂在组件局部状态上。Android 返回键走 `window.ddBack()`：先按后进先出消费 `useBackLayer` 注册的叠层（确认/口令/备份框、附件查看器、日历抽屉、三栏详情、标签面板），再在 `history.state.back` 存在时 `router.back()`，都没有才退出应用；锁定状态下直接退出，不动路由。
+**路由**：`vue-router`，5 条平铺路由 `/today`、`/discover`、`/me`、`/theme`、`/j/:id`。分界线一句话：**换"页"走路由，叠"层"走状态**——整月视图、附件大图、文件选择器、确认框、自定义主题编辑层都挂在组件局部状态上。Android 返回键走 `window.ddBack()`：先按后进先出消费 `useBackLayer` 注册的叠层（确认/口令/备份框、附件查看器、日历抽屉、三栏详情、标签面板、自定义主题编辑层），再在 `history.state.back` 存在时 `router.back()`，都没有才退出应用；锁定状态下直接退出，不动路由。
 
-**桌面三栏落在同样 5 条路由上**：`/today` 在窄屏渲染【周条 + 今天卡片 + 当日列表】，在宽屏渲染同一组件树的【迷你月历｜列表】两栏；屏幕到 1200 才加第三列，详情以 `DetailView` 的**内嵌态**（`entry-id` prop）挂在列表右侧，不切路由。选中日记日写在 `?d=`，选中的条目写在 `?e=`，刷新与前进后退都能还原；直接访问 `/j/:id`（搜索、深链）仍走整页路由。内嵌态复用同一份读写判定：日记今天直接编辑，历史日期只读，关闭时冲刷保存并从 query 里移除 `e`。`/me` 是 PRD §2.7 那张单页分组滚动页（profile + 统计卡 + 五组设置），主题行只显示当前主题名并跳 `/theme`；`/theme` 是浅色/深色调色板卡片页，`stats_overview` 与设置缓存只服务 `/me` 这一屏。
+**桌面三栏落在同样 5 条路由上**：`/today` 在窄屏渲染【周条 + 今天卡片 + 当日列表】，在宽屏渲染同一组件树的【迷你月历｜列表】两栏；屏幕到 1200 才加第三列，详情以 `DetailView` 的**内嵌态**（`entry-id` prop）挂在列表右侧，不切路由。选中日记日写在 `?d=`，选中的条目写在 `?e=`，刷新与前进后退都能还原；直接访问 `/j/:id`（搜索、深链）仍走整页路由。内嵌态复用同一份读写判定：日记今天直接编辑，历史日期只读，关闭时冲刷保存并从 query 里移除 `e`。`/me` 是 PRD §2.7 那张单页分组滚动页（profile + 统计卡 + 五组设置），主题行只显示当前主题名并跳 `/theme`；`/theme` 是浅色/深色预设与「自定义」入口的调色板卡片页（自定义编辑层不占路由，§6.8），`stats_overview` 与设置缓存只服务 `/me` 这一屏。
 
 **状态**：全局一个 Pinia store `session`，装两样东西——锁态、`Settings` 缓存。三条规则：
 
@@ -296,6 +302,10 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 去抖 1s（PRD §7）是 `useAutosave.ts` 里的具名常量，settings 清单里没有这一项（PRD §2.7）。`useAutosave` 只服务 `DetailView`；今天卡片是一次性提交，不在此列（§6.1）。
 
 `journal_save` 带 `revision`，服务端比对失败返回 `bad_revision`，处理动作一个：**丢弃本次，以最后一次冲刷为准**。
+
+**自定义主题与字体**：`Settings.theme` 增加 `custom`；`customTheme` 存四组 `{color, alpha}` 与 `background`，`uiFont` 存 `{name, label}` 或 `null`（§6.8）。`applyTheme()` 对预设只写 `data-theme` / `data-scheme`；对自定义额外把四组 `rgba()` 写到根节点内联样式，并在切回预设时清空。`applyFont()` 维护唯一 `<style id="dd-ui-font">`，把字体族前置进 `--font-body`。两者都只改根节点与内联样式，视图树不重建。
+
+**背景层**：自定义主题下根节点用固定的方格/图片背景（`body::before`，图片盖在方格上、`cover` 铺满视口）；页面外壳只铺一层模块底色，侧栏与顶栏不再叠，模块底色带 alpha 时透出它。导出卡片与锁屏在渲染前把模块 alpha 视为 100、隐藏背景层，保证 PNG 不透明、锁屏不露出背景。
 
 **样式**：取值全在 [UI.md §1](./UI.md)，本文件只管三条写法——色值与间距一律取 token（例外清单 UI.md §1.4）；一律 `logical properties`（`margin-inline-start`），RTL 靠 `dir="rtl"` 翻转，一套布局覆盖两个方向；Vditor 的覆盖集中在 `styles/vditor-override.css`，`!important` 只出现在这个文件里。
 
@@ -361,6 +371,33 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 
 **字节跨 IPC 的唯一例外**：PNG 由 WebView 画布生成，Rust 无法自己读，只能把 base64 传给 Rust（分段时每张各传一次）；媒体导入与其它文件 IO 仍走 asset 协议 / Rust 直读（§3.1、§3.2）。编辑态不提供导出（出图以预览排版为准），不进入导出流程就不重建预览，撤销栈、滚动位置与保存状态都不受影响。
 
+**6.8 自定义主题与自定义字体**
+
+`settings` 表继续是 key/value，值存 JSON。扩展两个结构化 key，`theme` 增加 `custom`：
+
+```json
+{
+  "theme": "custom",
+  "customTheme": {
+    "base": "light",
+    "surface": { "color": "#F6F7F6", "alpha": 100 },
+    "card": { "color": "#FFFFFF", "alpha": 100 },
+    "inset": { "color": "#EDEFEE", "alpha": 100 },
+    "scrim": { "color": "#111312", "alpha": 45 },
+    "background": null
+  },
+  "uiFont": { "name": "f3c9a1.ttf", "label": "霞鹜文楷" }
+}
+```
+
+- **模块映射固定四组**：`surface → --c-surface`（页面与外壳）、`card → --c-surface-1`（卡片与浮层）、`inset → --c-surface-2`（凹陷与输入）、`scrim → --c-scrim`。不拆第五层，避免把每个组件的表面再分一遍；对话框归“卡片与浮层”，工具栏与输入框归“凹陷与输入”。
+- **校验**（`db/settings.rs::validate`）：色值 `^#[0-9A-Fa-f]{6}$`，`alpha` 为 0–100 的整数，`base ∈ {light, dark}`，`background` 为 `null` 或合法资产名，`uiFont.name` 为合法字体文件名且扩展名在 `ttf/otf/woff/woff2`、`label` trim 后 ≤40 字符；越界返回 `bad_setting`，缺字段走 serde 默认值。
+- **种子与切换**：首次使用自定义主题（点卡片或进编辑层，且库里还没有 `customTheme`）时由前端以当前预设生成并 `settings_patch`；之后色块与滑杆在 `change`（松手）时写库一次，拖动只改本地预览。`applyTheme()` 对 `custom` 写 `data-theme="custom"`、`data-scheme=base`、四组 `rgba()` 内联；切回预设清空内联值。前端判断明暗一律以 `data-scheme` 为准，`isDarkTheme()` 继续只服务预设，主题行与卡片文案的取值不受影响。
+- **背景图**：`theme_bg_import` 复用缩略图的解码与 EXIF 拍平路径（§3.1），长边缩到 2560（不放大）、JPEG 质量 82，随机名落 `assets/theme/`；设置只存文件名。删除顺序是先 `settings_patch` 置 `null`，成功后 `theme_bg_remove(old)`。文件缺失时按方格降级并在 `console.warn` 带源地址，不阻断界面。
+- **字体**：`font_import` 随机名落 `assets/fonts/`，`label` 取原文件 stem（去路径、trim、≤40 字符），`format` 由魔数决定；写设置成功后再 `font_remove(old)`。`applyFont()` 注入唯一 `<style id="dd-ui-font">` 并前置 `--font-body`；等宽字体与图标不参与。加载失败回落默认栈，`document.fonts` 的错误写进控制台，不自动清设置。
+- **导出**：不改变 §6.7 的单图路径。进入导出前把导出卡片的模块 alpha 视为 100、不挂背景层；有自定义字体时用 `html-to-image` 的 `getFontEmbedCSS(exportCard)` 只取一次，传给所有分段的 `toPng`，避免每段重复抓取与 base64。取 CSS 失败按 `export_image` 报错，**不静默换字体**。
+- **锁屏**：`LockOverlay` 用 `surface` 的 100% 不透明值，不渲染背景层。
+
 ---
 
 ## 7. Vditor：四条补丁 + 一笔样式预算
@@ -385,6 +422,8 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 **Rust**：`tauri@2` + `tauri-plugin-dialog` / `tauri-plugin-opener`、`arboard`（桌面剪贴板，仅非 Android 目标）、`rusqlite{bundled}`、`serde`+`serde_json`、`uuid`(v7)、`chrono`(固定 offset，本地偏移取 `chrono::Local`)、`base64`（游标）、`tokio`(随 tauri)、`sha2`(锁口令，SHA-256)、`zip`、`mime_guess`(§3.1 的 Content-Type)、`image`(feature 开 `jpeg`/`png`/`webp`/`gif`/`bmp`，出缩略图用)、`argon2`(备份口令 KDF)、`chacha20poly1305`(XChaCha20-Poly1305)、`getrandom`(salt/nonce)、`zeroize`(派生密钥擦除)。数据目录取 `tauri::path`；FTS 偏移转码点用 `&str[..pos].chars().count()`。
 
 **前端**：`vue@3.5`、`vue-router`、`pinia`、`vditor`、`@tauri-apps/api`、`@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-opener`、`@mdi/js`(取 SVG path 常量；PRD §7 那 17 个心情图标名就是它的 `face-*`)、`html-to-image`(笔记导出图片，§6.7)、`vite`、`typescript`。月历与格子规格在 UI.md §3.2，自己实现；附件缩放（UI.md §3.10）用 pointer 事件与 `transform` 写在 `AssetViewer.vue` 里，不引 panzoom；日期显示走 `Intl`（§5）。
+
+自定义主题与字体不引入新依赖：字体魔数手写，背景缩放复用 `image`，导出的字体内联复用 `html-to-image` 的 `getFontEmbedCSS`（§6.8）。
 
 CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`、`npm run build`（内部即 `vue-tsc --noEmit` + `vite build`）。计划中但尚未接线的：`ts-rs` 生成物 diff 校验、`vitest run`、`node scripts/check-style.mjs`；三平台 matrix 跑构建，测试全在 ubuntu runner 跑一遍。
 
@@ -427,7 +466,9 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 
 `backup_crypt` 用临时目录做全流程：同一口令 encrypt → decrypt 逐字节相等（空文件、短内容、正好一块、多块跨帧）；错误口令、密文篡改、尾部截断一律 `bad_password`；普通 zip 不被 `is_encrypted` 误判。
 
-前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
+`settings` 与外观资产用临时目录：非法色值、透明度越界、未知基色、非法文件名一律 `bad_setting`，缺字段用默认值；`font_import` 的 ttf/otf/woff/woff2 四种魔数样本通过，`.ttc`、伪造扩展名与 >10MB 拒绝；背景图按 EXIF 拍平、长边缩到 2560 且不放大，输出 WebP。
+
+前端测 `utils/date` 与三个 composable：`diaryDayKey` / `diaryToday` / `displayParts` 的分界点边界与 24+ 显示、与 Rust 用例的对照表；`useAutosave`（`vi.useFakeTimers`，覆盖"未落库就切走必须 await"）、`useBreakpoint`（只在档位变化时 emit）、`useFind`（ranges 变化时游标夹取、空结果、单命中）。自定义主题测四组 `rgba()` 的生成与切回预设的清空、字体族前置与恢复默认、色值与 alpha 的归一化。视觉一致性由 UI.md 的 token 与 §8 的 `check-style.mjs` 保证，四个视图的观感靠 UI.md §7 的手工清单回归。
 
 ---
 
@@ -440,6 +481,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | V-3 | Vditor 在 WKWebView / Android WebView 上的四条补丁（§7）能否照搬生效，以及 `:where()` 零特异度盖得住它自带的选择器。最早验 | 换 CodeMirror 源码态，"详情即编辑"降级到 M2；样式盖得勉强就加特异度，仍然集中在同一个 override 文件里 |
 | V-4 | `Mutex<Connection>` + `spawn_blocking` 下，导出 2GB 附件目录时 UI 读写是否仍顺 | 已按第二只读连接设计（§4）；若仍卡顿，导出改成分片让出连接（每 50 条重新取锁） |
 | V-5 | ~~CSS Custom Highlight API 可用性~~ **已绕开**：搜索跳转高亮用 DOM `<mark>`（§6.3），两个 WebView 都不需要验它 | 若将来要"零 DOM 改动"的高亮，再回到 `CSS.highlights` / `::highlight()` |
+| V-6 | Android WebView 经 `http://asset.localhost` 加载 `@font-face`（含 MIME 兼容）、透明模块叠背景图的滚动帧率，以及 `html-to-image` 内联大字体后的内存峰值和分段导出耗时（§6.8） | 字体：该字体不参与导出，导出前提示并回落默认栈；背景图：长边降到 1920 并提高压缩；滚动：背景层随内容滚动或降级为纯色 |
 
 ---
 
@@ -463,3 +505,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | 向历史/未来日期补写、给旧日记改日期 | 写入只发生在当前日记日，旧日记只读（PRD §2.8） | 用户明确要求补记，且能给出不破坏时间线的交互时 |
 | 冲突三选框（本地/远端/合并） | `bad_revision` 一律"丢弃本次，以最后一次冲刷为准" | 出现多设备同步（PRD §4 已排除） |
 | 双 DOM 并存 + CSS `hidden-*` 断点方案（参考项目） | `useBreakpoint` 档位变化 + 组件按 `isWide` 分支渲染 | 无 |
+| 主题包的 JSON 导入/导出与分享 | 主题只在本机编辑，随备份包整体迁移（§6.8） | 出现跨设备共享主题的需求时 |
+| 字体子集化、字体随安装包分发 | 用户手动导入 ≤10MB 的完整字体（§6.8） | 有授权明确且值得内置的字体时 |
+| 背景模糊、视频背景、多图轮换 | 静态单图 + 方格兜底（§6.8） | V-6 给出滚动与内存结论后 |
+| 按模块自定义圆角/阴影/描边、自定义正文与强调色（v1） | 只开放四组底色与透明度，文字与图标取基色（§6.8） | 出现明确的可读性诉求或主题争议时 |

@@ -4,6 +4,65 @@ use serde_json::Value;
 
 use crate::error::AppError;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ThemeSlot {
+    pub color: String,
+    pub alpha: u8,
+}
+
+impl Default for ThemeSlot {
+    fn default() -> Self {
+        Self {
+            color: "#FFFFFF".into(),
+            alpha: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomTheme {
+    pub base: String,
+    pub surface: ThemeSlot,
+    pub card: ThemeSlot,
+    pub inset: ThemeSlot,
+    pub scrim: ThemeSlot,
+    pub background: Option<String>,
+}
+
+impl Default for CustomTheme {
+    fn default() -> Self {
+        Self {
+            base: "light".into(),
+            surface: ThemeSlot {
+                color: "#F6F7F6".into(),
+                alpha: 100,
+            },
+            card: ThemeSlot {
+                color: "#FFFFFF".into(),
+                alpha: 100,
+            },
+            inset: ThemeSlot {
+                color: "#EDEFEE".into(),
+                alpha: 100,
+            },
+            scrim: ThemeSlot {
+                color: "#111312".into(),
+                alpha: 45,
+            },
+            background: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiFont {
+    pub name: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -21,6 +80,8 @@ pub struct Settings {
     pub card_time: String,
     pub auto_edit: bool,
     pub export_width: u32,
+    pub custom_theme: Option<CustomTheme>,
+    pub ui_font: Option<UiFont>,
 }
 
 impl Default for Settings {
@@ -41,6 +102,8 @@ impl Default for Settings {
             card_time: "recorded".into(),
             auto_edit: true,
             export_width: 640,
+            custom_theme: None,
+            ui_font: None,
         }
     }
 }
@@ -60,6 +123,8 @@ const KEYS: &[&str] = &[
     "cardTime",
     "autoEdit",
     "exportWidth",
+    "customTheme",
+    "uiFont",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -100,16 +165,96 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
         card_time: read_field(conn, "cardTime", default.card_time),
         auto_edit: read_field(conn, "autoEdit", default.auto_edit),
         export_width: read_field(conn, "exportWidth", default.export_width),
+        custom_theme: read_field(conn, "customTheme", default.custom_theme),
+        ui_font: read_field(conn, "uiFont", default.ui_font),
     })
+}
+
+fn hex_color_ok(color: &str) -> bool {
+    let bytes = color.as_bytes();
+    bytes.len() == 7
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+fn safe_stem(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn split_safe_name(name: &str) -> Option<(&str, &str)> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let ext_ok = (1..=5).contains(&ext.len())
+        && ext
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    (safe_stem(stem) && ext_ok).then_some((stem, ext))
+}
+
+pub(crate) fn is_safe_image_name(name: &str) -> bool {
+    split_safe_name(name).is_some_and(|(_, ext)| {
+        matches!(ext, "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "avif")
+    })
+}
+
+pub(crate) fn is_safe_font_name(name: &str) -> bool {
+    split_safe_name(name)
+        .is_some_and(|(_, ext)| matches!(ext, "ttf" | "otf" | "woff" | "woff2"))
+}
+
+fn validate_custom_theme(theme: &CustomTheme) -> Result<(), AppError> {
+    if !matches!(theme.base.as_str(), "light" | "dark") {
+        return Err(AppError::new("bad_setting", "自定义主题基色不合法"));
+    }
+    let slots = [
+        ("surface", &theme.surface),
+        ("card", &theme.card),
+        ("inset", &theme.inset),
+        ("scrim", &theme.scrim),
+    ];
+    for (name, slot) in slots {
+        if !hex_color_ok(&slot.color) {
+            return Err(AppError::new("bad_setting", "自定义主题色值不合法")
+                .with_detail(format!("{name}: {}", slot.color)));
+        }
+        if slot.alpha > 100 {
+            return Err(AppError::new("bad_setting", "自定义主题透明度超出范围")
+                .with_detail(format!("{name}: {}", slot.alpha)));
+        }
+    }
+    if let Some(background) = &theme.background {
+        if !is_safe_image_name(background) {
+            return Err(AppError::new("bad_setting", "背景图文件名不合法")
+                .with_detail(background.clone()));
+        }
+    }
+    Ok(())
 }
 
 fn validate(settings: &Settings) -> Result<(), AppError> {
     if !matches!(
         settings.theme.as_str(),
         "system" | "light" | "warm" | "mist" | "blossom" | "dark" | "midnight" | "mocha"
-            | "forest"
+            | "forest" | "custom"
     ) {
         return Err(AppError::new("bad_setting", "未知主题"));
+    }
+    if let Some(custom) = &settings.custom_theme {
+        validate_custom_theme(custom)?;
+    }
+    if settings.theme == "custom" && settings.custom_theme.is_none() {
+        return Err(AppError::new("bad_setting", "自定义主题缺少配色"));
+    }
+    if let Some(font) = &settings.ui_font {
+        if !is_safe_font_name(&font.name) {
+            return Err(AppError::new("bad_setting", "字体文件名不合法")
+                .with_detail(font.name.clone()));
+        }
+        if font.label.trim().chars().count() > 40 {
+            return Err(AppError::new("bad_setting", "字体名称过长"));
+        }
     }
     if !matches!(settings.language.as_str(), "zh-CN" | "en") {
         return Err(AppError::new("bad_setting", "未知语言"));
@@ -168,4 +313,113 @@ pub fn patch(conn: &mut Connection, patch: Value) -> Result<Settings, AppError> 
     }
     tx.commit()?;
     Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate, CustomTheme, Settings, ThemeSlot, UiFont};
+
+    fn with_custom(base: &str, surface: &str, alpha: u8) -> Settings {
+        Settings {
+            theme: "custom".into(),
+            custom_theme: Some(CustomTheme {
+                base: base.into(),
+                surface: ThemeSlot {
+                    color: surface.into(),
+                    alpha,
+                },
+                ..CustomTheme::default()
+            }),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn default_settings_are_valid() {
+        assert!(validate(&Settings::default()).is_ok());
+    }
+
+    #[test]
+    fn custom_theme_needs_palette() {
+        let missing = Settings {
+            theme: "custom".into(),
+            ..Settings::default()
+        };
+        assert!(validate(&missing).is_err());
+        assert!(validate(&with_custom("light", "#F6F7F6", 100)).is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_custom_theme_values() {
+        assert!(validate(&with_custom("sepia", "#F6F7F6", 100)).is_err());
+        assert!(validate(&with_custom("light", "F6F7F6", 100)).is_err());
+        assert!(validate(&with_custom("light", "#F6F7", 100)).is_err());
+        assert!(validate(&with_custom("light", "#GGGGGG", 100)).is_err());
+        assert!(validate(&with_custom("light", "#F6F7F6", 101)).is_err());
+        assert!(validate(&with_custom("dark", "#101211", 0)).is_ok());
+    }
+
+    #[test]
+    fn rejects_unsafe_background_name() {
+        let theme = CustomTheme {
+            background: Some("../secret.jpg".into()),
+            ..CustomTheme::default()
+        };
+        let settings = Settings {
+            theme: "custom".into(),
+            custom_theme: Some(theme),
+            ..Settings::default()
+        };
+        assert!(validate(&settings).is_err());
+
+        let theme = CustomTheme {
+            background: Some("a1b2c3.jpg".into()),
+            ..CustomTheme::default()
+        };
+        let settings = Settings {
+            theme: "custom".into(),
+            custom_theme: Some(theme),
+            ..Settings::default()
+        };
+        assert!(validate(&settings).is_ok());
+    }
+
+    #[test]
+    fn validates_ui_font() {
+        let ok = Settings {
+            ui_font: Some(UiFont {
+                name: "f3c9a1.woff2".into(),
+                label: "霞鹜文楷".into(),
+            }),
+            ..Settings::default()
+        };
+        assert!(validate(&ok).is_ok());
+
+        let bad_ext = Settings {
+            ui_font: Some(UiFont {
+                name: "f3c9a1.ttc".into(),
+                label: "集合".into(),
+            }),
+            ..Settings::default()
+        };
+        assert!(validate(&bad_ext).is_err());
+
+        let traversal = Settings {
+            ui_font: Some(UiFont {
+                name: "../evil.ttf".into(),
+                label: "evil".into(),
+            }),
+            ..Settings::default()
+        };
+        assert!(validate(&traversal).is_err());
+
+        let long_label = Settings {
+            ui_font: Some(UiFont {
+                name: "f3c9a1.ttf".into(),
+                label: "字".repeat(41),
+            }),
+            ..Settings::default()
+        };
+        assert!(validate(&long_label).is_err());
+    }
 }
