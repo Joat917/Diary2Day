@@ -1,5 +1,6 @@
 import { toPng } from "html-to-image";
-import { describeError, IpcError } from "../ipc/client";
+import { assetExportViews, describeError, IpcError } from "../ipc/client";
+import { assetNameFromSrc, exportViewUrl } from "./assetUrl";
 
 // WebView canvas 单边上限（Chromium 16384）。超长日记按块切成多张，单张不降采样。
 const MAX_EDGE = 16384;
@@ -87,6 +88,32 @@ async function probeImage(label: string, src: string): Promise<string> {
   }
 }
 
+// Android WebView 会整张拒绝解码大位图（36MP 实测失败，连原始 asset 地址都报
+// EncodingError）。导出前让 Rust 生成限宽 / 限总像素的副本，前端只解码副本；
+// 小图不生成，继续用原图。
+export async function prepareExportImages(root: HTMLElement): Promise<void> {
+  const images = [...root.querySelectorAll<HTMLImageElement>("img")];
+  const names = new Set<string>();
+  for (const image of images) {
+    const name = assetNameFromSrc(image.getAttribute("src") ?? "");
+    if (name) names.add(name);
+  }
+  if (names.size === 0) return;
+  const views = await assetExportViews([...names]);
+  if (views.length === 0) return;
+  const byName = new Map(
+    views.map((item): [string, string] => [item.name, item.view]),
+  );
+  for (const image of images) {
+    const name = assetNameFromSrc(image.getAttribute("src") ?? "");
+    if (!name) continue;
+    const view = byName.get(name);
+    if (!view) continue;
+    const url = exportViewUrl(view);
+    if (url) image.src = url;
+  }
+}
+
 // foreignObject 不能引用外部资源：图片必须先变成 data URL，否则截出来是空白。
 export async function inlineImages(root: HTMLElement): Promise<void> {
   const images = [...root.querySelectorAll("img")];
@@ -123,7 +150,7 @@ export async function inlineImages(root: HTMLElement): Promise<void> {
       } catch (err) {
         const probes = await Promise.all([
           probeImage("独立 Image（Data URL）", dataUrl),
-          probeImage("独立 Image（原始地址）", src),
+          probeImage("独立 Image（当前地址）", src),
         ]);
         throw new IpcError(
           "export_image",

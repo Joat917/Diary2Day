@@ -9,6 +9,7 @@ import type {
   DataInfo,
   DayMark,
   ExportReport,
+  ExportView,
   ImportReport,
   Journal,
   JournalPage,
@@ -197,6 +198,10 @@ export function assetGc(names: string[]): Promise<number> {
 
 export function assetCleanUnused(): Promise<CleanupReport> {
   return call("asset_clean_unused");
+}
+
+export function assetExportViews(names: string[]): Promise<ExportView[]> {
+  return call("asset_export_views", { names });
 }
 
 export function shareDrain(): Promise<ShareReport | null> {

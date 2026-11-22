@@ -27,6 +27,7 @@ const LEGACY_PREFIX = "http://ddasset.localhost/";
 
 let assetsHref = "";
 let thumbsHref = "";
+let exportHref = "";
 
 function fileSrc(path: string): string {
   // The app data dir can contain parentheses; keep them encoded so they stay
@@ -45,12 +46,14 @@ export function setAssetBase(dir: string | null | undefined): void {
   if (!root) {
     assetsHref = "";
     thumbsHref = "";
+    exportHref = "";
     return;
   }
   const sep = root.includes("\\") ? "\\" : "/";
   const base = root.endsWith("\\") || root.endsWith("/") ? root : root + sep;
   assetsHref = fileSrc(base);
   thumbsHref = fileSrc(`${base}.thumbs${sep}`);
+  exportHref = fileSrc(`${base}.export${sep}`);
 }
 
 export function assetUrl(kind: "image" | "audio" | "video" | "t", name: string): string | null {
@@ -67,6 +70,18 @@ export function thumbUrl(name: string | null | undefined): string | null {
   if (!name) return null;
   const stem = name.replace(/\.[^.]+$/, "");
   return assetUrl("t", `${stem}.webp`);
+}
+
+const ASSET_NAME = /^[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,5}$/;
+
+export function assetNameFromSrc(src: string): string | null {
+  if (!assetsHref || !src.startsWith(assetsHref)) return null;
+  const name = src.slice(assetsHref.length);
+  return ASSET_NAME.test(name) ? name : null;
+}
+
+export function exportViewUrl(view: string): string | null {
+  return exportHref ? `${exportHref}${view}` : null;
 }
 
 export function assetMarkdown(name: string, kind: AssetUiKind): string {

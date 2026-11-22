@@ -34,6 +34,7 @@ import { renderNotePreview } from "../utils/notePreview";
 import {
   capturePng,
   inlineImages,
+  prepareExportImages,
   replaceMediaElements,
   splitExportChunks,
   waitForStable,
@@ -528,6 +529,7 @@ async function exportImage() {
       video: t("detail.exportVideo"),
       embed: t("detail.exportEmbed"),
     });
+    await prepareExportImages(article);
     await inlineImages(article);
     const chunks = splitExportChunks(card, stage, (index, total) =>
       `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,

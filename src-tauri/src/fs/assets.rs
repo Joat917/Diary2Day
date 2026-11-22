@@ -12,6 +12,12 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 const READ_BUFFER: usize = 64 * 1024;
+const EXPORT_VIEW_DIR: &str = ".export";
+// 导出卡片宽 640，最多 2 倍像素密度：宽度到 1280 就够。
+// 高度不设限，长图按比例保留；只再用总像素数兜住最终位图大小——
+// Android WebView 会整张拒绝解码大位图（36MP 实测失败），限宽管不到长图。
+const EXPORT_VIEW_MAX_WIDTH: u32 = 1280;
+const EXPORT_VIEW_MAX_PIXELS: u64 = 8_388_608;
 
 #[cfg(not(target_os = "android"))]
 pub const MEDIA_EXTENSIONS: &[&str] = &[
@@ -90,6 +96,94 @@ fn write_thumbnail(assets_dir: &Path, name: &str, path: &Path) {
         return;
     }
     let _ = thumb.save_with_format(thumbs.join(format!("{stem}.jpg")), image::ImageFormat::Jpeg);
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportViewDto {
+    pub name: String,
+    pub view: String,
+}
+
+// 大图不在 WebView 里解码，改由这里生成限宽 / 限总像素的副本，导出时替换 img 的 src。
+// 高按比例走；已经是小图就不生成，前端继续用原图。
+fn export_view_size(width: u32, height: u32) -> Option<(u32, u32)> {
+    if width <= EXPORT_VIEW_MAX_WIDTH
+        && u64::from(width) * u64::from(height) <= EXPORT_VIEW_MAX_PIXELS
+    {
+        return None;
+    }
+    let width_scale = f64::from(EXPORT_VIEW_MAX_WIDTH) / f64::from(width);
+    let pixel_scale =
+        (EXPORT_VIEW_MAX_PIXELS as f64 / (f64::from(width) * f64::from(height))).sqrt();
+    let scale = width_scale.min(pixel_scale).min(1.0);
+    Some((
+        ((f64::from(width) * scale).round() as u32).max(1),
+        ((f64::from(height) * scale).round() as u32).max(1),
+    ))
+}
+
+// 相机 JPEG 的方向在 EXIF 里，WebView 会照它显示，副本也要先拍平；
+// 90°/270° 会交换宽高，尺寸决策必须按拍平后的宽高算。
+fn export_view(name: &str, path: &Path, dir: &Path) -> Option<String> {
+    use image::metadata::Orientation;
+    use image::{DynamicImage, ImageDecoder, ImageReader};
+
+    let mut decoder = ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_decoder()
+        .ok()?;
+    let (raw_width, raw_height) = decoder.dimensions();
+    let orientation = decoder.orientation().ok()?;
+    let (width, height) = match orientation {
+        Orientation::Rotate90
+        | Orientation::Rotate270
+        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => (raw_height, raw_width),
+        _ => (raw_width, raw_height),
+    };
+    let (new_width, new_height) = export_view_size(width, height)?;
+
+    let stem = name.rsplit_once('.').map(|(value, _)| value).unwrap_or(name);
+    let view = format!("{stem}.webp");
+    let view_path = dir.join(&view);
+    if !view_path.is_file() {
+        if fs::create_dir_all(dir).is_err() {
+            return None;
+        }
+        let mut image = DynamicImage::from_decoder(decoder).ok()?;
+        image.apply_orientation(orientation);
+        let resized = image.resize_exact(
+            new_width,
+            new_height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        if resized
+            .save_with_format(&view_path, image::ImageFormat::WebP)
+            .is_err()
+        {
+            let _ = fs::remove_file(&view_path);
+            return None;
+        }
+    }
+    Some(view)
+}
+
+pub fn export_views(state: &AppState, names: Vec<String>) -> Result<Vec<ExportViewDto>, AppError> {
+    let dir = state.paths.assets_dir.join(EXPORT_VIEW_DIR);
+    let mut out = Vec::new();
+    for name in names {
+        if checked_kind(&name) != Some("image") {
+            continue;
+        }
+        let path = state.paths.assets_dir.join(&name);
+        if let Some(view) = export_view(&name, &path, &dir) {
+            out.push(ExportViewDto { name, view });
+        }
+    }
+    Ok(out)
 }
 
 pub fn import_reader(
@@ -271,6 +365,13 @@ fn remove_unused(state: &AppState, name: &str) -> Result<bool, AppError> {
         let thumbs = state.paths.assets_dir.join(".thumbs");
         let _ = fs::remove_file(thumbs.join(format!("{stem}.webp")));
         let _ = fs::remove_file(thumbs.join(format!("{stem}.jpg")));
+        let _ = fs::remove_file(
+            state
+                .paths
+                .assets_dir
+                .join(EXPORT_VIEW_DIR)
+                .join(format!("{stem}.webp")),
+        );
     }
     state.with_db(|conn| {
         conn.execute("DELETE FROM asset WHERE name = ?1", [name])?;

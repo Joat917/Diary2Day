@@ -55,6 +55,7 @@ pub fn run() {
             commands::media::media_import_paths,
             commands::media::asset_gc,
             commands::media::asset_clean_unused,
+            commands::media::asset_export_views,
             commands::data::data_export_dir,
             commands::data::data_import_md,
             commands::data::data_backup,

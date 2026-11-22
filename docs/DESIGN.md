@@ -180,6 +180,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `media_paste_import` | → `Asset[]` | 桌面由 Rust 读系统剪贴板（`arboard`）：文件列表按路径导入，图片编码成 PNG 再导入；Android 返回 `paste_media_unsupported`，提示改用附件按钮 |
 | `media_import_paths` | `paths[]` → `Asset[]` | 桌面原生拖放（`onDragDropEvent`）与文件对话框给出的路径；非媒体扩展名跳过 |
 | `asset_clean_unused` | → `CleanupReport{removed, freed}` | 手动诊断项：读全部正文得到引用集合（含回收站），遍历 `assets_dir` 删除未被引用的媒体文件与 `asset` 行（§3.1）。锁态返回 `locked` |
+| `asset_export_views` | `names[]` → `ExportView{name, view}[]` | 导出前给超大图生成 `.export/{stem}.webp`（限宽 1280px、限总像素 800 万，高按比例，§6.7）；已是小图的直接跳过，前端继续用原图 |
 | `share_drain` | → `ShareReport{id, dayKey, assets}` 或 `null` | 移动端分享收件箱：Kotlin `MainActivity` 把系统分享的文本/文件写进 `cache/share-inbox`，命令校验路径、导入资产并建条目（§6.6）。锁态返回 `locked`，收件箱保留待解锁重试 |
 | `data_export_dir` | `target_dir` → `ExportReport{dir, journals, assets}` | 桌面。同步等待完成；在 `target_dir` 下新建 `Diary2Day-<ts>/`，人可读 md + `assets/`（PRD §5.2、§6.4）。Android 走 `data_export_android`（§3.2） |
 | `data_backup` | `target, password?` → `BackupReport{path, size}` | 桌面。`VACUUM INTO` 快照 + assets + `manifest.json` 压成 zip；带口令时再加密成 `.ddbak`（§6.5）。Android 走 `data_backup_android` |
@@ -215,7 +216,7 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 
 图片和音视频由 WebView 自己请求，Rust 只经手元数据，字节不过 IPC。**插入方向同理**：选择、拖放、粘贴三种入口只把路径/URI 或平台能力交给 Rust，文件由 Rust 打开、校验、落盘，WebView 只收到 `Asset[]`；`asset_gc` 也只传文件名（§3）。
 
-**机制**：启用 Tauri 内置的 `asset` 协议（`tauri` 的 `protocol-asset` feature + `app.security.assetProtocol.enable`），启动时 `lib.rs` 用 `app.asset_protocol_scope().allow_directory(assets_dir, true)` 把 scope 收窄到附件目录（含 `.thumbs/`）。仓库里不再有自定义 scheme 的转发代码。物理 URL 由 `@tauri-apps/api/core` 的 `convertFileSrc` 生成：Windows/Android 是 `http://asset.localhost/<编码后的绝对路径>`，其余平台是 `asset://localhost/<编码后的绝对路径>`。文件不存在回 404，越出 scope 回 403，MIME 由 Tauri 嗅探，Range（视频拖动）由 Tauri 处理。
+**机制**：启用 Tauri 内置的 `asset` 协议（`tauri` 的 `protocol-asset` feature + `app.security.assetProtocol.enable`），启动时 `lib.rs` 用 `app.asset_protocol_scope().allow_directory(assets_dir, true)` 把 scope 收窄到附件目录（含 `.thumbs/`、`.export/`）。仓库里不再有自定义 scheme 的转发代码。物理 URL 由 `@tauri-apps/api/core` 的 `convertFileSrc` 生成：Windows/Android 是 `http://asset.localhost/<编码后的绝对路径>`，其余平台是 `asset://localhost/<编码后的绝对路径>`。文件不存在回 404，越出 scope 回 403，MIME 由 Tauri 嗅探，Range（视频拖动）由 Tauri 处理。
 
 **正文里只存逻辑 URL**（`![](ddasset://image/k3f9a1.png)`），数据库、导出格式与分享文本都是这一份字符串。物理 URL 只在两处出现：把内容交给 Vditor 之前（编辑器初始化、只读预览）用 `expandAssetUrls` 展开，取回编辑器内容或落库之前用 `collapseAssetUrls` 折回。`src/utils/assetUrl.ts` 是唯一映射处；启动时 `main.ts` 通过 `asset_paths` 命令拿到 `assets_dir`（该命令不走锁门禁，否则锁定状态下无法拼 URL）。
 
@@ -353,9 +354,9 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 1. **离屏渲染**：`exporting` 置真后挂载一段 `position: fixed; inset-inline-start: -10000px; width: 640px` 的 `.export-card`（日期行 + `.preview` 容器，背景 `--c-surface`）。`utils/notePreview.ts::renderNotePreview` 由屏幕预览与导出共用同一份 `Vditor.preview` 选项（主题跟随 `html[data-scheme]` 的明暗、`anchor: 0`），导出时强制 `lazyImages: false`。
 2. **等稳定**：`Vditor.preview` 的 promise 只等到 `md2html`，公式 / mermaid / hljs 都是异步补渲染；因此 `utils/noteImage.ts::waitForStable` 用 `MutationObserver` 观察 DOM，静默 250ms 才继续（4s 上限兜底），避免截到半张图。
 3. **替换媒体**：`<audio>` / `<video>` / `<iframe>` 在 `foreignObject` 里截不出内容，`replaceMediaElements`（异步）逐个换成静态块。音频建一个隐藏的 `<audio preload="metadata">` 读 `duration`，块内是类型标签 + 起点进度条 + `0:00 / 总时长`；视频用隐藏 `<video crossOrigin="anonymous">` 读时长后 seek 到 10%（上限 1s、下限 0.15s），`drawImage` 到 canvas 取一帧转 JPEG data URL 作封面，块内是 360px 高的封面（`object-fit: cover`）+ 居中播放标 + 右下角时长。`crossOrigin` 依赖 asset 协议回与窗口 origin 匹配的 ACAO，canvas 才不会被污染；元数据超时（4s）或编码不支持时降级成一行类型说明并 `console.warn` 完整错误，不阻断导出。`<iframe>` 仍是一行「嵌入内容 · 文件名」说明；音频与视频块不显示随机附件文件名。动态节点没有 scoped 的 `data-v` 属性，样式必须写成 `.export-card :deep(…)`。
-4. **内联图片**：`html-to-image` 走 SVG `foreignObject`，不能引用外部 URL。`inlineImages` 对每个非 `data:` 的 `<img>` 执行 `fetch(src)` → `FileReader` → data URL → `image.decode()`；正文图片是 asset 协议的 `convertFileSrc` 地址，读不到或解码失败按 `export_image` 抛出、detail 里保留源地址，**不静默换成占位**。这一环依赖各平台 WebView 对 asset 协议的 CORS 行为，必须真机验证。
+4. **内联图片**：`html-to-image` 走 SVG `foreignObject`，不能引用外部 URL。先 `prepareExportImages` 调 `asset_export_views`，由 Rust 在 `assets_dir/.export/{stem}.webp` 生成导出副本（WebP；**限宽 1280px、限总像素 800 万，高度按比例保留**，长图不裁也不压扁；先按 EXIF 方向拍平，尺寸按拍平后的宽高算），再把导出卡片里对应的 `<img src>`（正文里是 `convertFileSrc` 生成的 asset 地址）换成副本地址；已是小图的跳过、沿用原图，原图与正文引用始终不动。这层是因为 Android WebView 会整张拒解码大位图——实测 4223×8598 的 PNG 连原始 asset 地址在新 `Image` 里都报 `EncodingError`，仅限宽度管不住长图，所以再用总像素预算（解码后约 32MB）兜底；生成失败退回原图，真解不出来仍由下面的错误暴露。随后 `inlineImages` 对每个非 `data:` 的 `<img>` 执行 `fetch(src)` → `FileReader` → data URL → `image.decode()`，读不到或解码失败按 `export_image` 抛出、**不静默换成占位**。这一环依赖各平台 WebView 对 asset 协议的 CORS 行为，必须真机验证。为了在真机上能区分失败环节，detail 不只给源地址：按阶段（下载 / 转 Data URL / 设置后解码）列出 HTTP 状态与响应类型、Content-Type、Blob 类型与字节数、Data URL 字符数与前缀、元素 `complete` 与 `naturalWidth×naturalHeight`；解码失败时再对 Data URL 和当前 `<img>` 地址各起一个独立 `Image.decode()` 探针，写明各自成败与尺寸。
 5. **分段**：整篇高度超过 7500px 时，`splitExportChunks` 把卡片按顶层块切成多张，不做降采样。先克隆一份空卡片外壳（保留 scoped 的 `data-v` 属性，`:deep` 样式才继续生效），把原卡片的顶层子节点按顺序搬进新卡并实时量高；越线就把当前节点移到下一张。单个块自身超高时只能让它独占一张。切完移除原卡片，并把每张的日期行改写为「日期 · 第 i/N 张」；只有一张时原卡片原地保留，单图路径与文件名不变。
-6. **截图**：`capturePng` 对每张卡片先看 `getBoundingClientRect().height`——0 报 `export_empty`，>16384 报 `export_too_long`（detail 带单块实际高度，此时已无块可切）；再等 `document.fonts.ready`，`pixelRatio = min(2, max(1, (16384-64)/height))`（短图 2 倍，长图自动降倍以免越界），背景取 `--c-surface`，调 `html-to-image` 的 `toPng`。
+6. **截图**：`capturePng` 对每张卡片先看 `getBoundingClientRect().height`——0 报 `export_empty`，>16384 报 `export_too_long`（detail 带单块实际高度，此时已无块可切）；再等 `document.fonts.ready`，`pixelRatio = min(2, max(1, (16384-64)/height))`（短图 2 倍，长图自动降倍以免越界），背景取 `--c-surface`，调 `html-to-image` 的 `toPng`。`toPng` 抛错时包成 `export_image`，detail 带卡片宽高与实际 pixelRatio，便于区分是尺寸问题还是渲染问题。
 7. **保存**：`data:` 之后的部分交给 Rust。只有一张时走原路径：桌面先 `plugin-dialog` 的 `save` 拿路径（默认 `Diary2Day-{day_key}.png`）再 `image_export`；Android 直接 `image_export_android` 走 `save_file`。多张时桌面弹一次目录选择框（`plugin-dialog` 的 `open({directory:true})`），按 `Diary2Day-{day_key}-01.png` 序号逐个 `image_export`；Android 调 `images_export_android`，`pick_dir` 选一次目录后写入全部。Rust 只校验 base64 与 PNG 魔数（`bad_image`），写入后返回字节数 / 显示名 / 目录名。取消返回 `null`，前端不提示；失败按 §3.6 展示完整 code / message / detail。保存通道按 UA 里的 `Android/iOS` 分流，不调 `data_info`——那条命令会统计目录大小，不适合每次打开详情都跑一遍。
 
 **字节跨 IPC 的唯一例外**：PNG 由 WebView 画布生成，Rust 无法自己读，只能把 base64 传给 Rust（分段时每张各传一次）；媒体导入与其它文件 IO 仍走 asset 协议 / Rust 直读（§3.1、§3.2）。编辑态不提供导出（出图以预览排版为准），不进入导出流程就不重建预览，撤销栈、滚动位置与保存状态都不受影响。
@@ -456,7 +457,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 | `plugin-store`、`plugin-fs`、`plugin-upload`、`plugin-stronghold` | settings 进 SQLite；文件能力走自己的 `fs/` 命令；上传场景在桌面/移动里就是系统选择器；备份包加密用 RustCrypto（§6.5），整库加密按 PRD §5 不做 | 出现前端需要直接读写任意路径的需求 |
 | TanStack Query | `useCollection()`（20 行）+ `dd://data-changed` 事件驱动失效 | 视图数超过 8 个或出现跨页缓存共享 |
 | Tailwind/UnoCSS、VueUse、`vue-i18n`、`dayjs`/`date-fns`、日历与图标字体、连接池以外的 UI 库 | UI.md 的 token + 手写月历 + `@mdi/js` 常量 + `Intl` + 100 行 `t()` | token 体系撑不住多主题时；语言数超过 4 种时 |
-| 图片压缩、转码、EXIF 清理、视频首帧图 | §3.1 那张缩略图是唯一加工 | 用户真实反馈原图过大时，且届时要给导出留"存原图"开关 |
+| 图片压缩、转码、EXIF 清理、视频首帧图 | 只有两处加工：§3.1 的 512px 缩略图，和导出前按需生成的限宽 / 限总像素副本（`.export/`，原图一律不动，§6.7） | 需要 EXIF 清理或用户要求视频转码时 |
 | 附件与日记的关联表、引用计数、媒体库 | 正文里的 URL + 两个派生列；退出编辑/切条目/离开详情时先确认保存成功，再按文档内容差集调用 `asset_gc`（保存失败跳过本轮，`gc_unused` 不做引用校验）；另有一个手动触发的"清理未使用附件"，按下时做一次全库引用扫描并删孤儿文件（§3.1），不做自动化 | 附件量级大到必须整理时（PRD §2.4 的只读画廊视图） |
 | 组件快照测试、覆盖率指标 | §10 那三类：天归属、往返等价、派生一致性；视觉走 UI.md §7 手工清单 | 有第二个 contributor 接手时 |
 | 向历史/未来日期补写、给旧日记改日期 | 写入只发生在当前日记日，旧日记只读（PRD §2.8） | 用户明确要求补记，且能给出不破坏时间线的交互时 |

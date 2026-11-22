@@ -117,6 +117,11 @@ export interface Asset {
   height: number | null;
 }
 
+export interface ExportView {
+  name: string;
+  view: string;
+}
+
 
 export interface ExportReport {
   dir: string;

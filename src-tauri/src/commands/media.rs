@@ -51,6 +51,15 @@ pub async fn asset_clean_unused(state: State<'_, AppState>) -> Result<CleanupRep
     run_blocking(st, move |state| assets::clean_unused(&state)).await
 }
 
+#[tauri::command]
+pub async fn asset_export_views(
+    state: State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<Vec<assets::ExportViewDto>, AppError> {
+    let st = state.inner().clone();
+    run_blocking(st, move |state| assets::export_views(&state, names)).await
+}
+
 #[cfg(not(target_os = "android"))]
 fn pick_impl(state: &AppState) -> Result<Vec<AssetDto>, AppError> {
     use tauri_plugin_dialog::DialogExt;
