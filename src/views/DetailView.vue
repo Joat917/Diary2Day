@@ -769,7 +769,7 @@ watch(
 
 .fab {
   position: fixed;
-  inset-inline-end: var(--s-4);
+  inset-inline-end: calc(var(--s-4) + var(--safe-right));
   bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-4));
   display: inline-flex;
   align-items: center;

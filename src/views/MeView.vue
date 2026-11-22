@@ -1200,8 +1200,10 @@ html[dir="rtl"] .switch.on .knob {
   transition: background var(--m-1) var(--ease);
 }
 
-.action-row:hover:not(:disabled) {
-  background: var(--c-surface-2);
+@media (hover: hover) {
+  .action-row:hover:not(:disabled) {
+    background: var(--c-surface-2);
+  }
 }
 
 .action-row:disabled {

@@ -83,6 +83,8 @@ watch(
   align-items: center;
   justify-content: center;
   padding: var(--s-4);
+  padding-inline: calc(var(--s-4) + var(--safe-left)) calc(var(--s-4) + var(--safe-right));
+  padding-bottom: calc(var(--s-4) + var(--ime));
   background: var(--c-surface);
 }
 

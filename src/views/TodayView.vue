@@ -10,6 +10,7 @@ import {
 import { describeError, journalList, onDataChanged } from "../ipc/client";
 import type { JournalSummary } from "../ipc/types";
 import { t } from "../i18n";
+import { useBackLayer } from "../composables/useBackLayer";
 import { useBreakpoint } from "../composables/useBreakpoint";
 import { useSession } from "../stores/session";
 import { diaryToday, formatDayTitle, greetingKey } from "../utils/date";
@@ -116,6 +117,11 @@ function closeEntry() {
   }
   void router.replace({ path: "/today", query });
 }
+
+useBackLayer(sheetOpen, () => {
+  sheetOpen.value = false;
+});
+useBackLayer(() => isThreePane.value && !!openedId.value, closeEntry);
 
 const creating = ref(false);
 
@@ -409,7 +415,7 @@ onBeforeUnmount(() => {
 
 .fab {
   position: fixed;
-  inset-inline-end: var(--s-4);
+  inset-inline-end: calc(var(--s-4) + var(--safe-right));
   bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--s-4));
   display: inline-flex;
   align-items: center;

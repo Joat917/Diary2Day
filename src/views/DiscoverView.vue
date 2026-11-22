@@ -119,7 +119,10 @@ onBeforeUnmount(() => {
           class="input"
           type="search"
           :placeholder="t('discover.placeholder')"
+          enterkeyhint="search"
           autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
           spellcheck="false"
         />
         <button

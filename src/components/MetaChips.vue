@@ -10,6 +10,7 @@ import {
 import type { Tag } from "../ipc/types";
 import { IpcError, tagCreate, tagList } from "../ipc/client";
 import { t } from "../i18n";
+import { useBackLayer } from "../composables/useBackLayer";
 import { MOODS, moodByCode } from "../constants/moods";
 import { WEATHERS, weatherByCode } from "../constants/weather";
 import Icon from "./Icon.vue";
@@ -73,6 +74,8 @@ function close() {
   panel.value = null;
   draft.value = "";
 }
+
+useBackLayer(() => panel.value !== null, close);
 
 function onDocumentPointer(event: PointerEvent) {
   if (!panel.value) return;
@@ -281,6 +284,10 @@ async function submitDraft() {
           class="tag-input"
           type="text"
           :placeholder="t('meta.tagPlaceholder')"
+          enterkeyhint="done"
+          autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
           @keydown.enter.prevent="submitDraft"
         />
         <button

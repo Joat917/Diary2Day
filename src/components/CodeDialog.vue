@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
+import { useBackLayer } from "../composables/useBackLayer";
 
 const props = withDefaults(
   defineProps<{
@@ -16,6 +17,11 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{ submit: [code: string]; cancel: [] }>();
+
+useBackLayer(
+  () => props.open,
+  () => emit("cancel"),
+);
 
 const code = ref("");
 const confirmCode = ref("");
@@ -118,11 +124,15 @@ function onKeydown(event: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   padding: var(--s-6);
+  padding-inline: calc(var(--s-6) + var(--safe-left)) calc(var(--s-6) + var(--safe-right));
+  padding-bottom: calc(var(--s-6) + var(--ime));
   background: var(--c-scrim);
 }
 
 .dialog {
   width: min(100%, 360px);
+  max-height: 100%;
+  overflow-y: auto;
   padding: var(--s-5);
   border-radius: var(--r-lg);
   background: var(--c-surface-1);

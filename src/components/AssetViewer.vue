@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { mdiClose, mdiMagnifyMinusOutline, mdiMagnifyPlusOutline, mdiRestore } from "@mdi/js";
 import { t } from "../i18n";
+import { useBackLayer } from "../composables/useBackLayer";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ src: string | null; alt?: string }>();
@@ -17,6 +18,9 @@ let originX = 0;
 let originY = 0;
 
 const open = computed(() => !!props.src);
+
+useBackLayer(open, () => emit("close"));
+
 const transform = computed(
   () => `translate(${x.value}px, ${y.value}px) scale(${scale.value})`,
 );
@@ -135,7 +139,8 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey, true));
 
 .stage {
   position: absolute;
-  inset: 48px 16px 72px;
+  inset: calc(48px + var(--safe-top)) calc(16px + var(--safe-right))
+    calc(72px + var(--safe-bottom)) calc(16px + var(--safe-left));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -157,7 +162,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey, true));
 
 .toolbar {
   position: absolute;
-  inset-inline-end: var(--s-4);
+  inset-inline-end: calc(var(--s-4) + var(--safe-right));
   bottom: calc(var(--s-4) + var(--safe-bottom));
   display: flex;
   align-items: center;

@@ -163,8 +163,9 @@ const activeIndex = computed(() =>
 .app {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: calc(100dvh - var(--ime));
   padding-top: var(--safe-top);
+  padding-inline: var(--safe-left) var(--safe-right);
   background: var(--c-surface);
 }
 

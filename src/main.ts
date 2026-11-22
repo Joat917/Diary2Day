@@ -6,6 +6,7 @@ import "./styles/base.css";
 import "./styles/vditor-override.css";
 import App from "./App.vue";
 import router from "./router";
+import { handleBackLayer } from "./composables/useBackLayer";
 import { assetPaths, isTauri } from "./ipc/client";
 import { useLock } from "./stores/lock";
 import { useSession } from "./stores/session";
@@ -13,32 +14,54 @@ import { setAssetBase } from "./utils/assetUrl";
 
 declare global {
   interface Window {
-    ddApplyInsets?: (top: number, bottom: number) => void;
+    ddApplyInsets?: (
+      top: number,
+      right: number,
+      bottom: number,
+      left: number,
+      ime: number,
+    ) => void;
+    ddBack?: () => boolean;
     ddInsets?: {
       read: () => string;
+      setDark: (dark: boolean) => void;
     };
   }
 }
 
-function applySafeInsets(top: number, bottom: number) {
-  const style = document.documentElement.style;
-  style.setProperty("--safe-top", `${Math.max(0, top)}px`);
-  style.setProperty("--safe-bottom", `${Math.max(0, bottom)}px`);
+function revealActiveControl() {
+  requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || active === document.body) return;
+    let target: HTMLElement = active;
+    if (active.isContentEditable) {
+      const node = window.getSelection()?.anchorNode ?? null;
+      const element = node instanceof HTMLElement ? node : node?.parentElement;
+      if (element) target = element;
+    }
+    target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 }
 
-function initAndroidInsets() {
-  const bridge = window.ddInsets;
-  if (!bridge) return;
-  window.ddApplyInsets = applySafeInsets;
-  try {
-    const values = bridge.read().split(",");
-    applySafeInsets(Number.parseFloat(values[0]) || 0, Number.parseFloat(values[1]) || 0);
-  } catch (error) {
-    console.error("[insets] initial read failed", error);
-  }
+function applySafeInsets(top: number, right: number, bottom: number, left: number, ime: number) {
+  const root = document.documentElement;
+  const style = root.style;
+  const px = (value: number) => `${Math.max(0, value || 0)}px`;
+  style.setProperty("--safe-top", px(top));
+  style.setProperty("--safe-right", px(right));
+  style.setProperty("--safe-bottom", px(bottom));
+  style.setProperty("--safe-left", px(left));
+  style.setProperty("--ime", px(ime));
+  const keyboardOpen = (ime || 0) > 1;
+  root.dataset.keyboard = keyboardOpen ? "1" : "0";
+  if (keyboardOpen) revealActiveControl();
 }
 
-initAndroidInsets();
+function syncSystemBarAppearance() {
+  const scheme = document.documentElement.dataset.scheme;
+  if (!scheme) return;
+  window.ddInsets?.setDark(scheme === "dark");
+}
 
 const app = createApp(App);
 const pinia = createPinia();
@@ -47,6 +70,35 @@ app.use(router);
 
 const session = useSession(pinia);
 const lock = useLock(pinia);
+
+function initAndroidInsets() {
+  const bridge = window.ddInsets;
+  if (!bridge) return;
+  window.ddApplyInsets = applySafeInsets;
+  window.ddBack = () => {
+    if (lock.locked) return false;
+    if (handleBackLayer()) return true;
+    if (router.options.history.state.back) {
+      void router.back();
+      return true;
+    }
+    return false;
+  };
+  try {
+    const values = bridge.read().split(",");
+    const value = (index: number) => Number.parseFloat(values[index]) || 0;
+    applySafeInsets(value(0), value(1), value(2), value(3), value(4));
+  } catch (error) {
+    console.error("[insets] initial read failed", error);
+  }
+  new MutationObserver(syncSystemBarAppearance).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-scheme"],
+  });
+  syncSystemBarAppearance();
+}
+
+initAndroidInsets();
 
 void (async () => {
   try {

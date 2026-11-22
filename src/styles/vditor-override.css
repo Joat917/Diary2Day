@@ -62,8 +62,14 @@
   border-radius: var(--r-sm);
 }
 
-.vditor-toolbar__item .vditor-tooltipped:hover {
-  background: var(--c-surface-1);
+@media (hover: hover) {
+  .vditor-toolbar__item .vditor-tooltipped:hover {
+    background: var(--c-surface-1);
+  }
+
+  .vditor-toolbar__item .vditor-tooltipped:hover svg {
+    color: var(--c-primary);
+  }
 }
 
 /* Toolbar tips open downward: upward tips are clipped above the toolbar. */
@@ -101,8 +107,7 @@
   color: var(--c-on-surface-muted);
 }
 
-.vditor-toolbar__item--current svg,
-.vditor-toolbar__item .vditor-tooltipped:hover svg {
+.vditor-toolbar__item--current svg {
   color: var(--c-primary);
 }
 

@@ -7,8 +7,10 @@ import android.os.Parcelable
 import android.provider.OpenableColumns
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,8 +20,12 @@ import java.util.concurrent.Executors
 
 class MainActivity : TauriActivity() {
   private val shareQueue = Executors.newSingleThreadExecutor()
+  private var webView: WebView? = null
   @Volatile private var insetTopDp = 0f
+  @Volatile private var insetRightDp = 0f
   @Volatile private var insetBottomDp = 0f
+  @Volatile private var insetLeftDp = 0f
+  @Volatile private var insetImeDp = 0f
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -29,36 +35,63 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    this.webView = webView
+    // Tauri registers its own back callback before the webview exists; registering here keeps
+    // ours most recent (dispatch is LIFO) so layers and routes are consumed before it.
+    onBackPressedDispatcher.addCallback(
+      this,
+      object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          webView.evaluateJavascript("window.ddBack ? window.ddBack() : false") { result ->
+            if (result != "true") finish()
+          }
+        }
+      },
+    )
     webView.addJavascriptInterface(InsetsBridge(), "ddInsets")
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
-      val bars = insets.getInsets(
-        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-      )
-      pushInsets(webView, bars.top, bars.bottom)
+      pushInsets(webView, insets)
       insets
     }
     webView.post {
       val insets = ViewCompat.getRootWindowInsets(webView)
-      if (insets != null) {
-        val bars = insets.getInsets(
-          WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-        )
-        pushInsets(webView, bars.top, bars.bottom)
-      }
+      if (insets != null) pushInsets(webView, insets)
       ViewCompat.requestApplyInsets(webView)
     }
   }
 
-  private fun pushInsets(webView: WebView, topPx: Int, bottomPx: Int) {
+  private fun pushInsets(webView: WebView, insets: WindowInsetsCompat) {
+    val bars = insets.getInsets(
+      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+    )
+    val imePx =
+      if (insets.isVisible(WindowInsetsCompat.Type.ime())) {
+        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+      } else {
+        0
+      }
     val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-    val top = topPx / density
-    val bottom = bottomPx / density
-    if (top == insetTopDp && bottom == insetBottomDp) return
+    val top = bars.top / density
+    val right = bars.right / density
+    val bottom = bars.bottom / density
+    val left = bars.left / density
+    val ime = imePx / density
+    if (top == insetTopDp &&
+      right == insetRightDp &&
+      bottom == insetBottomDp &&
+      left == insetLeftDp &&
+      ime == insetImeDp
+    ) {
+      return
+    }
     insetTopDp = top
+    insetRightDp = right
     insetBottomDp = bottom
+    insetLeftDp = left
+    insetImeDp = ime
     webView.post {
       webView.evaluateJavascript(
-        "window.ddApplyInsets && window.ddApplyInsets($top, $bottom)",
+        "window.ddApplyInsets && window.ddApplyInsets($top, $right, $bottom, $left, $ime)",
         null,
       )
     }
@@ -66,7 +99,19 @@ class MainActivity : TauriActivity() {
 
   private inner class InsetsBridge {
     @JavascriptInterface
-    fun read(): String = "$insetTopDp,$insetBottomDp"
+    fun read(): String =
+      "$insetTopDp,$insetRightDp,$insetBottomDp,$insetLeftDp,$insetImeDp"
+
+    @JavascriptInterface
+    fun setDark(dark: Boolean) {
+      val view = webView ?: return
+      view.post {
+        WindowCompat.getInsetsController(window, view).apply {
+          isAppearanceLightStatusBars = !dark
+          isAppearanceLightNavigationBars = !dark
+        }
+      }
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

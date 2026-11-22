@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { t } from "../i18n";
+import { useBackLayer } from "../composables/useBackLayer";
 
 const props = withDefaults(
   defineProps<{
@@ -15,6 +16,11 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{ confirm: []; cancel: [] }>();
+
+useBackLayer(
+  () => props.open,
+  () => emit("cancel"),
+);
 
 const cancelButton = ref<HTMLButtonElement | null>(null);
 let previousFocus: HTMLElement | null = null;
@@ -86,6 +92,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   align-items: center;
   justify-content: center;
   padding: var(--s-6);
+  padding-inline: calc(var(--s-6) + var(--safe-left)) calc(var(--s-6) + var(--safe-right));
+  padding-bottom: calc(var(--s-6) + var(--ime));
   background: var(--c-scrim);
 }
 

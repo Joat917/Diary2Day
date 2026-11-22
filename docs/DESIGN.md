@@ -253,7 +253,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 
 ## 5. 前端形态
 
-**路由**：`vue-router`，5 条平铺路由 `/today`、`/discover`、`/me`、`/theme`、`/j/:id`。分界线一句话：**换"页"走路由，叠"层"走状态**——整月视图、附件大图、文件选择器、确认框都挂在组件局部状态上。移动端返回键接路由历史（Tauri 的 `on_back_pressed` → `router.back()`）。
+**路由**：`vue-router`，5 条平铺路由 `/today`、`/discover`、`/me`、`/theme`、`/j/:id`。分界线一句话：**换"页"走路由，叠"层"走状态**——整月视图、附件大图、文件选择器、确认框都挂在组件局部状态上。Android 返回键走 `window.ddBack()`：先按后进先出消费 `useBackLayer` 注册的叠层（确认/口令/备份框、附件查看器、日历抽屉、三栏详情、标签面板），再在 `history.state.back` 存在时 `router.back()`，都没有才退出应用；锁定状态下直接退出，不动路由。
 
 **桌面三栏落在同样 5 条路由上**：`/today` 在窄屏渲染【周条 + 今天卡片 + 当日列表】，在宽屏渲染同一组件树的【迷你月历｜列表】两栏；屏幕到 1200 才加第三列，详情以 `DetailView` 的**内嵌态**（`entry-id` prop）挂在列表右侧，不切路由。选中日记日写在 `?d=`，选中的条目写在 `?e=`，刷新与前进后退都能还原；直接访问 `/j/:id`（搜索、深链）仍走整页路由。内嵌态复用同一份读写判定：日记今天直接编辑，历史日期只读，关闭时冲刷保存并从 query 里移除 `e`。`/me` 是 PRD §2.7 那张单页分组滚动页（profile + 统计卡 + 五组设置），主题行只显示当前主题名并跳 `/theme`；`/theme` 是浅色/深色调色板卡片页，`stats_overview` 与设置缓存只服务 `/me` 这一屏。
 
@@ -379,7 +379,7 @@ CI：当前跑 `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test`�
 5. `tauri-plugin-dialog`（桌面另存为/打开目录）要动三处：`Cargo.toml`、`tauri.conf.json`、`capabilities`。
 6. 应用图标：`public/app-icon.svg` 是唯一矢量源，`index.html` 以它作为 favicon；修改后运行 `npx tauri icon public/app-icon.svg` 重新生成桌面与移动端图标，不直接编辑 `src-tauri/icons/` 和 `src-tauri/gen/` 里的位图。
 7. `tauri-plugin-android-fs = "=30.2.0"`：放在 `[target.'cfg(target_os = "android")'.dependencies]`，`lib.rs` 里只在 Android 注册；桌面构建不下载也不编译。它要求 `tauri ^2.12`，并依赖 `tauri-plugin-fs`。
-8. Android 安全区：`targetSdk 36` 强制 edge-to-edge，WebView 的 `env(safe-area-inset-*)` 不可靠。`MainActivity.onWebViewCreate` 注册 `ViewCompat.setOnApplyWindowInsetsListener`，把 `systemBars + displayCutout` 换算成 dp，经 `addJavascriptInterface` + `evaluateJavascript` 推给 `window.ddApplyInsets`；`main.ts` 写 `--safe-top` / `--safe-bottom`，CSS 只认这两个变量（默认值回退 `env()`）。状态栏/导航栏图标明暗不跟主题联动，留给系统默认。
+8. Android 窗口适配：`targetSdk 36` 强制 edge-to-edge，WebView 的 `env(safe-area-inset-*)` 不可靠。`MainActivity.onWebViewCreate` 注册 `ViewCompat.setOnApplyWindowInsetsListener`，把 `systemBars + displayCutout` 与可见的 `ime()` 换算成 dp，经 `addJavascriptInterface` + `evaluateJavascript` 推给 `window.ddApplyInsets(top, right, bottom, left, ime)`；`main.ts` 写 `--safe-top/right/bottom/left` 与 `--ime`，CSS 只认这几个变量（默认值回退 `env()` / 0）。Activity 设 `windowSoftInputMode="adjustResize"` 以接收 IME insets（edge-to-edge 下窗口本身不缩），键盘高度由 `--ime` 扣减：`.app` 用 `calc(100dvh - var(--ime))`，`html[data-keyboard="1"]` 时隐藏底部导航与浮动按钮，输入类浮层在 `--ime` 内避让，聚焦控件在键盘打开过程中反复滚入视野。返回键由 `onBackPressedDispatcher` 接管，`evaluateJavascript("window.ddBack()")` 返回 `true` 表示已消费，否则 `finish()`。状态栏/导航栏图标明暗经 `ddInsets.setDark(true|false)` 交给 `WindowInsetsControllerCompat`，`main.ts` 观察 `html[data-scheme]` 随主题同步。
 9. 版本号：`package.json` 是唯一来源。`tauri.conf.json` 的 `version` 写 `../package.json`，桌面安装包与 Android `versionName` 都从它解析；`Cargo.toml` 的 `version` 只作 crate 元数据，手动保持一致。Android `versionCode` 由 Tauri CLI 按 `major*1000000 + minor*1000 + patch` 生成到 `gen/android/app/tauri.properties`（Gradle 读取，不手改、不入库）；需要覆盖时写 `bundle.android.versionCode`。关于页与桌面侧栏的版本号在构建时从 `package.json` 读取，不再硬编码。
 
 ---
