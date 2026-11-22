@@ -63,6 +63,8 @@ export const zhCN = {
   "detail.exportImage": "导出为图片",
   "detail.exportImagePending": "正在生成图片…",
   "detail.exportImageDone": "已导出 {name}",
+  "detail.exportImagesDone": "已导出 {count} 张图片到 {name}",
+  "detail.exportChunk": "第 {index}/{total} 张",
   "detail.exportAudio": "音频",
   "detail.exportVideo": "视频",
   "detail.exportEmbed": "嵌入内容",

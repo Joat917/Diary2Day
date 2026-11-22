@@ -13,6 +13,7 @@ use crate::state::AppState;
 
 const READ_BUFFER: usize = 64 * 1024;
 
+#[cfg(not(target_os = "android"))]
 pub const MEDIA_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "mp3", "wav", "ogg", "m4a", "aac", "flac",
     "mp4", "webm", "mov", "mkv",
@@ -178,6 +179,7 @@ pub fn import_reader(
     })
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn import_bytes(state: &AppState, orig_name: &str, bytes: &[u8]) -> Result<AssetDto, AppError> {
     let mut cursor = bytes;
     import_reader(state, orig_name, &mut cursor)

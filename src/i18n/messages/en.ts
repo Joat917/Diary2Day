@@ -61,6 +61,8 @@ export const en = {
   "detail.exportImage": "Export as image",
   "detail.exportImagePending": "Rendering image…",
   "detail.exportImageDone": "Saved {name}",
+  "detail.exportImagesDone": "Saved {count} images to {name}",
+  "detail.exportChunk": "Part {index} of {total}",
   "detail.exportAudio": "Audio",
   "detail.exportVideo": "Video",
   "detail.exportEmbed": "Embedded content",

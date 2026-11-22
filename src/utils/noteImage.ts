@@ -1,8 +1,9 @@
 import { toPng } from "html-to-image";
 import { describeError, IpcError } from "../ipc/client";
 
-// WebView canvas 单边上限（Chromium 16384）。超长日记不硬截，直接报错。
+// WebView canvas 单边上限（Chromium 16384）。超长日记按块切成多张，单张不降采样。
 const MAX_EDGE = 16384;
+const CHUNK_LIMIT = 7500;
 const SETTLE_QUIET_MS = 250;
 const SETTLE_TIMEOUT_MS = 4000;
 
@@ -331,6 +332,58 @@ export async function replaceMediaElements(
   );
 }
 
+// 超长卡片按块级子节点切分：克隆卡片外壳（保留 scoped 的 data-v 属性），把原节点逐个
+// 搬进新卡片并实时量高，越线就换下一张。单个块自身超高时只能让它独占一张。
+export function splitExportChunks(
+  card: HTMLElement,
+  stage: HTMLElement,
+  label: (index: number, total: number) => string,
+): HTMLElement[] {
+  if (card.getBoundingClientRect().height <= CHUNK_LIMIT) return [card];
+  const article = card.querySelector<HTMLElement>("article");
+  const shell = card.cloneNode(true) as HTMLElement;
+  const shellArticle = shell.querySelector<HTMLElement>("article");
+  if (!article || !shellArticle) return [card];
+  shellArticle.replaceChildren();
+
+  const chunks: HTMLElement[] = [];
+  const makeChunk = (): { card: HTMLElement; article: HTMLElement } | null => {
+    const clone = shell.cloneNode(true) as HTMLElement;
+    const body = clone.querySelector<HTMLElement>("article");
+    if (!body) return null;
+    stage.append(clone);
+    chunks.push(clone);
+    return { card: clone, article: body };
+  };
+
+  const nodes = [...article.childNodes];
+  const first = makeChunk();
+  if (!first) return [card];
+  let current = first;
+  article.replaceChildren();
+
+  for (const node of nodes) {
+    if (node.nodeType === Node.TEXT_NODE && !(node.textContent ?? "").trim()) continue;
+    current.article.append(node);
+    if (current.card.getBoundingClientRect().height <= CHUNK_LIMIT) continue;
+    if (current.article.childNodes.length === 1) continue;
+    current.article.removeChild(node);
+    const next = makeChunk();
+    if (!next) break;
+    current = next;
+    current.article.append(node);
+  }
+
+  card.remove();
+  if (chunks.length > 1) {
+    chunks.forEach((chunk, index) => {
+      const date = chunk.querySelector(".export-date");
+      if (date) date.textContent = label(index + 1, chunks.length);
+    });
+  }
+  return chunks;
+}
+
 export async function capturePng(card: HTMLElement, background: string): Promise<string> {
   await document.fonts.ready;
   const height = Math.ceil(card.getBoundingClientRect().height);
@@ -338,8 +391,8 @@ export async function capturePng(card: HTMLElement, background: string): Promise
   if (height > MAX_EDGE) {
     throw new IpcError(
       "export_too_long",
-      "这篇日记太长，无法导出为单张图片",
-      `高度 ${height}px，上限 ${MAX_EDGE}px`,
+      "这段内容太高，无法导出",
+      `单块高度 ${height}px，上限 ${MAX_EDGE}px`,
     );
   }
   const pixelRatio = Math.min(2, Math.max(1, (MAX_EDGE - 64) / height));

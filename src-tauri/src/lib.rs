@@ -65,6 +65,8 @@ pub fn run() {
             #[cfg(target_os = "android")]
             commands::android_data::image_export_android,
             #[cfg(target_os = "android")]
+            commands::android_data::images_export_android,
+            #[cfg(target_os = "android")]
             commands::android_data::data_export_android,
             #[cfg(target_os = "android")]
             commands::android_data::data_import_android,

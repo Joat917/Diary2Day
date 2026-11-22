@@ -187,8 +187,9 @@ Rust 命令全部 `snake_case`，TS 侧 `client.ts` 一一映射；分页统一 
 | `backup_password_get` | → `password` 或 `null` | 读取本机记住的备份口令（`data_dir/backup-password.bin`，固定密钥加密，§6.5）；锁态返回 `locked` |
 | `backup_password_set` | `password?` → `void` | 写入或删除（`null`）记住的口令；该文件不进入备份包（§6.5） |
 | `data_import_md` | `dir` → `ImportReport{journals, assets}` | 桌面。与 export 对称（§6.4）；同一 `id` 按 upsert 处理。Android 走 `data_import_android` |
-| `image_export` | `target, data` → `u64` | 桌面。把笔记图片导出器产出的 base64 PNG 写到用户选定路径（`plugin-dialog` 的 `save` 先给 `target`）；校验 base64 与 PNG 魔数，失败 `bad_image`。字节仅在此跨一次 IPC（§6.7） |
+| `image_export` | `target, data` → `u64` | 桌面。把笔记图片导出器产出的 base64 PNG 写到用户选定路径（`plugin-dialog` 的 `save` 先给 `target`）；校验 base64 与 PNG 魔数，失败 `bad_image`。字节仅在此跨 IPC，分段时逐张调用（§6.7） |
 | `image_export_android` | `name, data` → `name` 或 `null` | Android。`save_file` 定位置后 `open_file_writable` 写入同一份 PNG；取消 `null`（§3.2、§6.7） |
+| `images_export_android` | `names, datas` → 目录显示名 或 `null` | Android。分段导出（§6.7）：`pick_dir` 选一次目录，先整体解码再逐张 `create_new_file` + `open_file_writable` 写入；取消 `null`（§3.2） |
 | `data_export_android` | → `ExportReport` 或 `null` | Android。`Picker::pick_dir` 选目标树，`cache/export` 暂存后逐文件写入 SAF；取消返回 `null`（§3.2） |
 | `data_import_android` | → `ImportReport` 或 `null` | Android。`pick_dir` → `cache/import` → 复用 `import_dir`；取消 `null` |
 | `data_backup_android` | `password?` → `BackupReport{path, size}` 或 `null` | Android。`save_file` 先定位置（无口令 `.zip` + `application/zip`，有口令 `.ddbak` + `application/octet-stream`），`cache/backup-out` 打包后写入 URI；`path` 是显示名而非绝对路径 |
@@ -238,6 +239,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 - **命令装配**：全部 `#[cfg(target_os = "android")]`（`commands/android_data.rs`），桌面构建不编译；`generate_handler!` 里的对应条目同样带 `cfg`。前端按 `data_info.mobile` 选命令集，进度行、错误行、恢复确认与成功后重载的流程不变。
 - **分享出**：插件自带的 `Opener::share_file` / `share_files` 可把暂存文件交给系统分享面板。暂不单独做"分享条目"入口——后续导出加密时会弹出选择窗口，分享与保存两个按钮就放在那个窗口里，共用同一份暂存文件。
 - **单图保存不暂存**：笔记图片导出（§6.7）由 `image_export_android` 直接 `save_file` 拿 URI，解码 base64 后 `open_file_writable` 写入，不落 `cache/`；取消同样映射为 `null`。
+- **多图保存不暂存**：分段导出（§6.7）由 `images_export_android` 一次 `pick_dir` 拿目标目录，先整体解码全部 PNG（任一失败整组不写，避免留下半套图片），再逐个 `create_new_file` + `open_file_writable` 写入；取消返回 `null`。
 
 ---
 
@@ -352,10 +354,11 @@ Rust 的 `share_drain` 读取收件箱：每个文件 `canonicalize` 后必须�
 2. **等稳定**：`Vditor.preview` 的 promise 只等到 `md2html`，公式 / mermaid / hljs 都是异步补渲染；因此 `utils/noteImage.ts::waitForStable` 用 `MutationObserver` 观察 DOM，静默 250ms 才继续（4s 上限兜底），避免截到半张图。
 3. **替换媒体**：`<audio>` / `<video>` / `<iframe>` 在 `foreignObject` 里截不出内容，`replaceMediaElements`（异步）逐个换成静态块。音频建一个隐藏的 `<audio preload="metadata">` 读 `duration`，块内是类型标签 + 起点进度条 + `0:00 / 总时长`；视频用隐藏 `<video crossOrigin="anonymous">` 读时长后 seek 到 10%（上限 1s、下限 0.15s），`drawImage` 到 canvas 取一帧转 JPEG data URL 作封面，块内是 360px 高的封面（`object-fit: cover`）+ 居中播放标 + 右下角时长。`crossOrigin` 依赖 asset 协议回与窗口 origin 匹配的 ACAO，canvas 才不会被污染；元数据超时（4s）或编码不支持时降级成一行类型说明并 `console.warn` 完整错误，不阻断导出。`<iframe>` 仍是一行「嵌入内容 · 文件名」说明；音频与视频块不显示随机附件文件名。动态节点没有 scoped 的 `data-v` 属性，样式必须写成 `.export-card :deep(…)`。
 4. **内联图片**：`html-to-image` 走 SVG `foreignObject`，不能引用外部 URL。`inlineImages` 对每个非 `data:` 的 `<img>` 执行 `fetch(src)` → `FileReader` → data URL → `image.decode()`；正文图片是 asset 协议的 `convertFileSrc` 地址，读不到或解码失败按 `export_image` 抛出、detail 里保留源地址，**不静默换成占位**。这一环依赖各平台 WebView 对 asset 协议的 CORS 行为，必须真机验证。
-5. **截图**：`capturePng` 先看 `getBoundingClientRect().height`——0 报 `export_empty`，>16384 报 `export_too_long`（detail 带实际高度）；再等 `document.fonts.ready`，`pixelRatio = min(2, max(1, (16384-64)/height))`（短图 2 倍，长图自动降倍以免越界），背景取 `--c-surface`，调 `html-to-image` 的 `toPng`。
-6. **保存**：`data:` 之后的部分交给 Rust。桌面先 `plugin-dialog` 的 `save` 拿路径（默认 `Diary2Day-{day_key}.png`）再 `image_export`；Android 直接 `image_export_android` 走 `save_file`。Rust 只校验 base64 与 PNG 魔数（`bad_image`），写入后返回字节数 / 显示名。取消返回 `null`，前端不提示；失败按 §3.6 展示完整 code / message / detail。保存通道按 UA 里的 `Android/iOS` 分流，不调 `data_info`——那条命令会统计目录大小，不适合每次打开详情都跑一遍。
+5. **分段**：整篇高度超过 7500px 时，`splitExportChunks` 把卡片按顶层块切成多张，不做降采样。先克隆一份空卡片外壳（保留 scoped 的 `data-v` 属性，`:deep` 样式才继续生效），把原卡片的顶层子节点按顺序搬进新卡并实时量高；越线就把当前节点移到下一张。单个块自身超高时只能让它独占一张。切完移除原卡片，并把每张的日期行改写为「日期 · 第 i/N 张」；只有一张时原卡片原地保留，单图路径与文件名不变。
+6. **截图**：`capturePng` 对每张卡片先看 `getBoundingClientRect().height`——0 报 `export_empty`，>16384 报 `export_too_long`（detail 带单块实际高度，此时已无块可切）；再等 `document.fonts.ready`，`pixelRatio = min(2, max(1, (16384-64)/height))`（短图 2 倍，长图自动降倍以免越界），背景取 `--c-surface`，调 `html-to-image` 的 `toPng`。
+7. **保存**：`data:` 之后的部分交给 Rust。只有一张时走原路径：桌面先 `plugin-dialog` 的 `save` 拿路径（默认 `Diary2Day-{day_key}.png`）再 `image_export`；Android 直接 `image_export_android` 走 `save_file`。多张时桌面弹一次目录选择框（`plugin-dialog` 的 `open({directory:true})`），按 `Diary2Day-{day_key}-01.png` 序号逐个 `image_export`；Android 调 `images_export_android`，`pick_dir` 选一次目录后写入全部。Rust 只校验 base64 与 PNG 魔数（`bad_image`），写入后返回字节数 / 显示名 / 目录名。取消返回 `null`，前端不提示；失败按 §3.6 展示完整 code / message / detail。保存通道按 UA 里的 `Android/iOS` 分流，不调 `data_info`——那条命令会统计目录大小，不适合每次打开详情都跑一遍。
 
-**字节跨 IPC 的唯一例外**：PNG 由 WebView 画布生成，Rust 无法自己读，只能把 base64 传一次；媒体导入与其它文件 IO 仍走 asset 协议 / Rust 直读（§3.1、§3.2）。编辑态不提供导出（出图以预览排版为准），不进入导出流程就不重建预览，撤销栈、滚动位置与保存状态都不受影响。
+**字节跨 IPC 的唯一例外**：PNG 由 WebView 画布生成，Rust 无法自己读，只能把 base64 传给 Rust（分段时每张各传一次）；媒体导入与其它文件 IO 仍走 asset 协议 / Rust 直读（§3.1、§3.2）。编辑态不提供导出（出图以预览排版为准），不进入导出流程就不重建预览，撤销栈、滚动位置与保存状态都不受影响。
 
 ---
 

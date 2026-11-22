@@ -10,12 +10,13 @@ import {
   mdiPinOutline,
   mdiTrashCanOutline,
 } from "@mdi/js";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   assetGc,
   describeError,
   imageExport,
   imageExportAndroid,
+  imagesExportAndroid,
   IpcError,
   journalDelete,
   journalGet,
@@ -34,6 +35,7 @@ import {
   capturePng,
   inlineImages,
   replaceMediaElements,
+  splitExportChunks,
   waitForStable,
 } from "../utils/noteImage";
 import AssetViewer from "../components/AssetViewer.vue";
@@ -65,6 +67,7 @@ const previewEl = ref<HTMLElement | null>(null);
 const editorWrapEl = ref<HTMLElement | null>(null);
 const editorPane = ref<InstanceType<typeof EditorPane> | null>(null);
 const viewerSrc = ref<string | null>(null);
+const exportStageEl = ref<HTMLElement | null>(null);
 const exportCardEl = ref<HTMLElement | null>(null);
 const exportArticleEl = ref<HTMLElement | null>(null);
 const exporting = ref(false);
@@ -447,15 +450,24 @@ function surfaceColor(): string {
   return value || (isDark() ? "black" : "white");
 }
 
-function exportFileName(): string {
+function exportFileBase(): string {
   const key =
     journal.value?.day_key ?? diaryToday(session.settings.dayBoundaryMinutes);
-  return `Diary2Day-${key}.png`;
+  return `Diary2Day-${key}`;
+}
+
+function exportFileName(): string {
+  return `${exportFileBase()}.png`;
+}
+
+function dataOf(dataUrl: string): string {
+  const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  if (!data) throw new IpcError("export_empty", "生成的图片为空");
+  return data;
 }
 
 async function savePng(dataUrl: string, fileName: string): Promise<string | null> {
-  const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  if (!data) throw new IpcError("export_empty", "生成的图片为空");
+  const data = dataOf(dataUrl);
   if (mobilePlatform) return imageExportAndroid(fileName, data);
   const target = await saveDialog({
     title: t("detail.exportImage"),
@@ -467,6 +479,32 @@ async function savePng(dataUrl: string, fileName: string): Promise<string | null
   return target.split(/[\\/]/).pop() ?? target;
 }
 
+async function savePngSet(images: string[], base: string): Promise<string | null> {
+  const width = Math.max(2, String(images.length).length);
+  const entries = images.map((dataUrl, index) => ({
+    name: `${base}-${String(index + 1).padStart(width, "0")}.png`,
+    data: dataOf(dataUrl),
+  }));
+  if (mobilePlatform) {
+    return imagesExportAndroid(
+      entries.map((entry) => entry.name),
+      entries.map((entry) => entry.data),
+    );
+  }
+  const picked = await openDialog({
+    title: t("detail.exportImage"),
+    directory: true,
+    multiple: false,
+  });
+  if (!picked) return null;
+  const dir = picked.replace(/[\\/]+$/, "");
+  const sep = dir.includes("\\") ? "\\" : "/";
+  for (const entry of entries) {
+    await imageExport(`${dir}${sep}${entry.name}`, entry.data);
+  }
+  return dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
+}
+
 async function exportImage() {
   if (!canExport.value || exporting.value) return;
   exporting.value = true;
@@ -474,9 +512,12 @@ async function exportImage() {
   exportNotice.value = null;
   try {
     await nextTick();
+    const stage = exportStageEl.value;
     const card = exportCardEl.value;
     const article = exportArticleEl.value;
-    if (!card || !article) throw new IpcError("export_empty", "导出区域未就绪");
+    if (!stage || !card || !article) {
+      throw new IpcError("export_empty", "导出区域未就绪");
+    }
     await renderNotePreview(article, content.value, {
       dark: isDark(),
       lazyImages: false,
@@ -488,11 +529,28 @@ async function exportImage() {
       embed: t("detail.exportEmbed"),
     });
     await inlineImages(article);
-    const dataUrl = await capturePng(card, surfaceColor());
-    // 探测音视频会拉长整个流程；页面若已离开，别再弹保存框。
-    if (!card.isConnected) return;
-    const saved = await savePng(dataUrl, exportFileName());
-    if (saved) exportNotice.value = t("detail.exportImageDone", { name: saved });
+    const chunks = splitExportChunks(card, stage, (index, total) =>
+      `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,
+    );
+    const images: string[] = [];
+    for (const chunk of chunks) {
+      images.push(await capturePng(chunk, surfaceColor()));
+    }
+    // 探测音视频与逐张出图会拉长整个流程；页面若已离开，别再弹保存框。
+    if (!chunks[0].isConnected) return;
+    const saved =
+      images.length === 1
+        ? await savePng(images[0], exportFileName())
+        : await savePngSet(images, exportFileBase());
+    if (saved) {
+      exportNotice.value =
+        images.length === 1
+          ? t("detail.exportImageDone", { name: saved })
+          : t("detail.exportImagesDone", {
+              count: images.length,
+              name: saved,
+            });
+    }
   } catch (err) {
     console.error(`[export] image failed: ${describeError(err)}`, err);
     exportError.value = describeError(err);
@@ -737,7 +795,7 @@ watch(
 
     <AssetViewer :src="viewerSrc" @close="viewerSrc = null" />
 
-    <div v-if="exporting" class="export-stage" aria-hidden="true">
+    <div v-if="exporting" ref="exportStageEl" class="export-stage" aria-hidden="true">
       <div ref="exportCardEl" class="export-card">
         <p class="export-date">{{ dateText }}</p>
         <article ref="exportArticleEl" class="preview" />

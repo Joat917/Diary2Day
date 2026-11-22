@@ -247,6 +247,13 @@ export function imageExportAndroid(name: string, data: string): Promise<string |
   return call("image_export_android", { name, data });
 }
 
+export function imagesExportAndroid(
+  names: string[],
+  datas: string[],
+): Promise<string | null> {
+  return call("images_export_android", { names, datas });
+}
+
 export function dataPickRestoreAndroid(): Promise<PickedBackup | null> {
   return call("data_pick_restore_android");
 }

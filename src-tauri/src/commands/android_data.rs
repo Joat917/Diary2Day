@@ -249,6 +249,57 @@ pub async fn image_export_android(
 }
 
 #[tauri::command]
+pub async fn images_export_android(
+    state: State<'_, AppState>,
+    names: Vec<String>,
+    datas: Vec<String>,
+) -> Result<Option<String>, AppError> {
+    if names.len() != datas.len() || names.is_empty() {
+        return Err(AppError::new("bad_request", "导出的图片清单不完整")
+            .with_detail(format!("names {}, datas {}", names.len(), datas.len())));
+    }
+    let st = state.inner().clone();
+    run_blocking(st, move |state| {
+        let api = state.app.android_fs();
+        let Some(tree) = api
+            .picker()
+            .pick_dir(None, false)
+            .map_err(|err| android_err("无法打开目录选择器", err))?
+        else {
+            return Ok(None);
+        };
+
+        // 先全部解码，避免写到一半才发现某张图片坏了。
+        let files = names
+            .iter()
+            .zip(datas.iter())
+            .map(|(name, data)| {
+                let file = safe_name(name);
+                let file = if file.to_ascii_lowercase().ends_with(".png") {
+                    file
+                } else {
+                    format!("{file}.png")
+                };
+                Ok((file, export::decode_png(data)?))
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+
+        for (file, bytes) in files {
+            let uri = api
+                .create_new_file(&tree, &file, Some("image/png"))
+                .map_err(|err| android_err("无法在所选目录创建文件", err))?;
+            let mut out = api
+                .open_file_writable(&uri)
+                .map_err(|err| android_err("无法写入所选文件", err))?;
+            out.write_all(&bytes)?;
+            out.flush()?;
+        }
+        Ok(Some(api.get_name_or_last_path_segment(&tree)))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn data_pick_restore_android(
     state: State<'_, AppState>,
 ) -> Result<Option<PickedBackup>, AppError> {
