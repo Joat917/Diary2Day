@@ -336,7 +336,9 @@ async function load() {
     loadedAssets = referencedAssetNames(item.content);
     const locked = item.day_key < diaryToday(session.settings.dayBoundaryMinutes);
     editing.value =
-      !locked && (embedded.value || route.query.edit === "1" || !queryText());
+      !locked &&
+      (route.query.edit === "1" ||
+        (session.settings.autoEdit && !queryText()));
     await nextTick();
     if (editing.value) {
       pendingFocus.value = true;

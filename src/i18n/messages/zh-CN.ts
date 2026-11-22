@@ -173,6 +173,7 @@ export const zhCN = {
   "me.dayBoundary": "修仙模式",
   "me.dayBoundaryHint": "分界点之前的记录算作前一天（00:00–07:59）",
   "me.indent": "首行缩进",
+  "me.autoEdit": "打开即进入编辑",
   "me.data": "数据",
   "me.dataDir": "数据目录",
   "me.openDataDir": "打开数据目录",

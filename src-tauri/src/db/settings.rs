@@ -19,6 +19,7 @@ pub struct Settings {
     pub reduce_motion: bool,
     pub day_boundary_minutes: u32,
     pub card_time: String,
+    pub auto_edit: bool,
 }
 
 impl Default for Settings {
@@ -37,6 +38,7 @@ impl Default for Settings {
             reduce_motion: false,
             day_boundary_minutes: 0,
             card_time: "recorded".into(),
+            auto_edit: true,
         }
     }
 }
@@ -54,6 +56,7 @@ const KEYS: &[&str] = &[
     "reduceMotion",
     "dayBoundaryMinutes",
     "cardTime",
+    "autoEdit",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -92,6 +95,7 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
             default.day_boundary_minutes,
         ),
         card_time: read_field(conn, "cardTime", default.card_time),
+        auto_edit: read_field(conn, "autoEdit", default.auto_edit),
     })
 }
 

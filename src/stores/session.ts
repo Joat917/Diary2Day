@@ -18,6 +18,7 @@ const defaults: Settings = {
   reduceMotion: false,
   dayBoundaryMinutes: 0,
   cardTime: "recorded",
+  autoEdit: true,
 };
 
 export const useSession = defineStore("session", () => {

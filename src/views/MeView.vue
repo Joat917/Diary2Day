@@ -134,6 +134,10 @@ async function toggleIndent() {
   await session.patch({ indentFirstLine: !session.settings.indentFirstLine });
 }
 
+async function toggleAutoEdit() {
+  await session.patch({ autoEdit: !session.settings.autoEdit });
+}
+
 const boundaryValue = computed(() =>
   formatBoundary(session.settings.dayBoundaryMinutes),
 );
@@ -776,6 +780,19 @@ onBeforeUnmount(() => {
               :aria-checked="session.settings.indentFirstLine"
               :class="{ on: session.settings.indentFirstLine }"
               @click="toggleIndent"
+            >
+              <span class="knob" />
+            </button>
+          </div>
+          <div class="row">
+            <span class="label">{{ t("me.autoEdit") }}</span>
+            <button
+              class="switch"
+              type="button"
+              role="switch"
+              :aria-checked="session.settings.autoEdit"
+              :class="{ on: session.settings.autoEdit }"
+              @click="toggleAutoEdit"
             >
               <span class="knob" />
             </button>

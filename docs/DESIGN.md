@@ -269,7 +269,7 @@ Android 的目录/文件选择器只回 `content://` URI，`std::fs` 打不开�
 - 详情与整篇编辑才挂 `EditorPane`。桌面三栏里"今天卡片 + 详情编辑器"是 textarea 与 Vditor 并存，各管一个输入焦点。
 - `EditorPane` 卸载时调 `vditor.destroy()`；`DetailView` 以条目 id 为 key，切条目前先 `flushSave()`，再卸载旧实例、挂新实例（`?e=` 变化走同一条路径）。撤销栈不跨条目保留，滚动位置由每次加载时的 `scrollTop = 0` 重置。
 
-**当前日记与只读过去**：`session.settings.dayBoundaryMinutes` 是唯一输入，`utils/date.ts::diaryToday(boundary, now)` 与 Rust 的 `compute_day_key` 同式。`/today` 的 `selected` 缺省取它；`TodayCard` 只在 `selected === today` 时挂载；`DetailView` 加载时把 `day_key < diaryToday` 置为 `readOnly`，`persist()` 第一行短路，编辑入口（FAB / 顶栏铅笔 / 双击 / `E` / `?edit=1`）全部经过这一个布尔。新建路由 `/j/new` 不带日期，保存时用 `recordedAtNow()`，`day_key` 仍由 Rust 单向决定；空白草稿由 `persist()` 的 trim 检查挡在落库之前。
+**当前日记与只读过去**：`session.settings.dayBoundaryMinutes` 是唯一输入，`utils/date.ts::diaryToday(boundary, now)` 与 Rust 的 `compute_day_key` 同式。`/today` 的 `selected` 缺省取它；`TodayCard` 只在 `selected === today` 时挂载；`DetailView` 加载时把 `day_key < diaryToday` 置为 `readOnly`，`persist()` 第一行短路，编辑入口（FAB / 顶栏铅笔 / 双击 / `E` / `?edit=1`）全部经过这一个布尔；初始形态由 `?edit=1`（显式编辑意图）或 `settings.autoEdit`（设置「打开即进入编辑」，默认开）决定，带 `?q=` 进入一律先预览。新建路由 `/j/new` 不带日期，保存时用 `recordedAtNow()`，`day_key` 仍由 Rust 单向决定；空白草稿由 `persist()` 的 trim 检查挡在落库之前。
 
 **`EditorPane.vue`** 对外暴露 `modelValue`、`dirty`、`insertText(text)`、`renderSource`（"看源码"切换）、`revealRange(range)`（把 §6.3 的码点区间滚进视野并落光标）。Vditor 的 DOM 归 Vditor：编辑器内容单向流出，外部只在初始挂载与显式"看源码"切换两个时机写入，联动一律走事件回调。Vditor 初始化会清空宿主元素的 `innerHTML`，因此它挂在内层专属容器 `.editor-body` 上，拖入遮罩与插入提示留在外层 `.editor`，由 Vue 独占；原生拖放的命中检测就注册在这个外层元素上（§7 第 2 条）。
 

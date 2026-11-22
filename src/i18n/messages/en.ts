@@ -171,6 +171,7 @@ export const en = {
   "me.dayBoundary": "Night owl mode",
   "me.dayBoundaryHint": "Entries before this time belong to the previous day (00:00–07:59)",
   "me.indent": "Indent first line",
+  "me.autoEdit": "Open in edit mode",
   "me.data": "Data",
   "me.dataDir": "Data folder",
   "me.openDataDir": "Open data folder",

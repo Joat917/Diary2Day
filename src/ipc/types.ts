@@ -24,6 +24,7 @@ export interface Settings {
   reduceMotion: boolean;
   dayBoundaryMinutes: number;
   cardTime: CardTime;
+  autoEdit: boolean;
 }
 
 export interface Tag {
