@@ -80,10 +80,7 @@ function pick(day: string) {
 }
 
 function dotCount(day: string): number {
-  const count = marks.value[day] ?? 0;
-  if (count <= 1) return count;
-  if (count <= 3) return 3;
-  return 2;
+  return Math.min(marks.value[day] ?? 0, 3);
 }
 
 function dayNumber(day: string): number {
@@ -108,7 +105,6 @@ function dayNumber(day: string): number {
             <span class="weekday">{{ weekdayName(day) }}</span>
             <span class="number">{{ dayNumber(day) }}</span>
             <span class="dots" aria-hidden="true">
-              <span v-if="(marks[day] ?? 0) > 3" class="more">{{ marks[day] }}</span>
               <span v-for="index in dotCount(day)" :key="index" class="dot" />
             </span>
           </button>
@@ -235,12 +231,6 @@ function dayNumber(day: string): number {
   height: 4px;
   border-radius: var(--r-pill);
   background: var(--c-primary);
-}
-
-.more {
-  font-size: var(--t-caption);
-  line-height: var(--t-caption-lh);
-  color: var(--c-primary);
 }
 
 @media (hover: hover) {

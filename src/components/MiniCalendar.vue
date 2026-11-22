@@ -180,10 +180,7 @@ function onPointerUp(event: PointerEvent) {
 }
 
 function dotCount(day: string): number {
-  const count = marks.value[day] ?? 0;
-  if (count <= 1) return count;
-  if (count <= 3) return 3;
-  return 2;
+  return Math.min(marks.value[day] ?? 0, 3);
 }
 </script>
 
@@ -235,7 +232,6 @@ function dotCount(day: string): number {
             <span class="number">{{ parseDayKey(cell.day).day }}</span>
             <span class="dots" aria-hidden="true">
               <template v-if="cell.inMonth && (marks[cell.day] ?? 0) > 0">
-                <span v-if="(marks[cell.day] ?? 0) > 3" class="more">{{ marks[cell.day] }}</span>
                 <span v-for="index in dotCount(cell.day)" :key="index" class="dot" />
               </template>
             </span>
@@ -401,10 +397,8 @@ function dotCount(day: string): number {
   box-shadow: inset 0 0 0 1.5px var(--c-on-primary);
 }
 
-.day.selected .dot,
-.day.selected .more {
+.day.selected .dot {
   background: var(--c-on-primary);
-  color: var(--c-on-primary);
 }
 
 .day.cursor:not(.selected) {
@@ -424,11 +418,5 @@ function dotCount(day: string): number {
   height: 4px;
   border-radius: var(--r-pill);
   background: var(--c-primary);
-}
-
-.more {
-  font-size: var(--t-caption);
-  line-height: 1;
-  color: var(--c-primary);
 }
 </style>
