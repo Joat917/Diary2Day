@@ -55,9 +55,10 @@ pub async fn asset_clean_unused(state: State<'_, AppState>) -> Result<CleanupRep
 pub async fn asset_export_views(
     state: State<'_, AppState>,
     names: Vec<String>,
+    width: u32,
 ) -> Result<Vec<assets::ExportViewDto>, AppError> {
     let st = state.inner().clone();
-    run_blocking(st, move |state| assets::export_views(&state, names)).await
+    run_blocking(st, move |state| assets::export_views(&state, names, width)).await
 }
 
 #[cfg(not(target_os = "android"))]

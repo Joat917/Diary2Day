@@ -89,9 +89,9 @@ async function probeImage(label: string, src: string): Promise<string> {
 }
 
 // Android WebView 会整张拒绝解码大位图（36MP 实测失败，连原始 asset 地址都报
-// EncodingError）。导出前让 Rust 生成限宽 / 限总像素的副本，前端只解码副本；
+// EncodingError）。导出前让 Rust 生成限宽副本（Android 另限总像素），前端只解码副本；
 // 小图不生成，继续用原图。
-export async function prepareExportImages(root: HTMLElement): Promise<void> {
+export async function prepareExportImages(root: HTMLElement, width: number): Promise<void> {
   const images = [...root.querySelectorAll<HTMLImageElement>("img")];
   const names = new Set<string>();
   for (const image of images) {
@@ -99,7 +99,7 @@ export async function prepareExportImages(root: HTMLElement): Promise<void> {
     if (name) names.add(name);
   }
   if (names.size === 0) return;
-  const views = await assetExportViews([...names]);
+  const views = await assetExportViews([...names], width);
   if (views.length === 0) return;
   const byName = new Map(
     views.map((item): [string, string] => [item.name, item.view]),

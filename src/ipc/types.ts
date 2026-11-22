@@ -25,6 +25,7 @@ export interface Settings {
   dayBoundaryMinutes: number;
   cardTime: CardTime;
   autoEdit: boolean;
+  exportWidth: number;
 }
 
 export interface Tag {

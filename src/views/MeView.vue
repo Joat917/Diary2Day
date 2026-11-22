@@ -152,6 +152,22 @@ async function toggleReduceMotion() {
   await session.patch({ reduceMotion: !session.settings.reduceMotion });
 }
 
+const EXPORT_WIDTH_MIN = 320;
+const EXPORT_WIDTH_MAX = 1280;
+
+async function setExportWidth(input: HTMLInputElement) {
+  const raw = input.value.trim();
+  const parsed = Number(raw);
+  const value =
+    raw && Number.isFinite(parsed)
+      ? Math.min(Math.max(Math.round(parsed), EXPORT_WIDTH_MIN), EXPORT_WIDTH_MAX)
+      : session.settings.exportWidth;
+  // 清空或乱填时把显示恢复成当前设置，不发请求。
+  input.value = String(value);
+  if (value === session.settings.exportWidth) return;
+  await session.patch({ exportWidth: value });
+}
+
 async function openFolder() {
   try {
     await openDataDir();
@@ -697,6 +713,22 @@ onBeforeUnmount(() => {
               <span class="knob" />
             </button>
           </div>
+          <div class="row">
+            <span class="label">{{ t("me.exportWidth") }}</span>
+            <span class="number-wrap">
+              <input
+                class="number-input"
+                type="number"
+                inputmode="numeric"
+                :min="EXPORT_WIDTH_MIN"
+                :max="EXPORT_WIDTH_MAX"
+                step="1"
+                :value="session.settings.exportWidth"
+                @change="setExportWidth($event.target as HTMLInputElement)"
+              />
+              <span class="number-unit">px</span>
+            </span>
+          </div>
         </div>
       </section>
 
@@ -1157,6 +1189,45 @@ onBeforeUnmount(() => {
 .time-input {
   padding-inline: var(--s-3);
   font-variant-numeric: tabular-nums;
+}
+
+.number-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+}
+
+.number-input {
+  appearance: textfield;
+  -moz-appearance: textfield;
+  width: 76px;
+  min-height: 34px;
+  padding-inline: var(--s-3);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  color: var(--c-on-surface);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.number-input:focus-visible {
+  border-color: var(--c-primary);
+  outline: none;
+}
+
+.number-unit {
+  color: var(--c-on-surface-muted);
+  font-size: var(--t-small);
 }
 
 .select-chevron {

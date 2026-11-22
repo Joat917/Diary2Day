@@ -529,7 +529,7 @@ async function exportImage() {
       video: t("detail.exportVideo"),
       embed: t("detail.exportEmbed"),
     });
-    await prepareExportImages(article);
+    await prepareExportImages(article, session.settings.exportWidth);
     await inlineImages(article);
     const chunks = splitExportChunks(card, stage, (index, total) =>
       `${dateText.value} · ${t("detail.exportChunk", { index, total })}`,
@@ -798,7 +798,11 @@ watch(
     <AssetViewer :src="viewerSrc" @close="viewerSrc = null" />
 
     <div v-if="exporting" ref="exportStageEl" class="export-stage" aria-hidden="true">
-      <div ref="exportCardEl" class="export-card">
+      <div
+        ref="exportCardEl"
+        class="export-card"
+        :style="{ width: session.settings.exportWidth + 'px' }"
+      >
         <p class="export-date">{{ dateText }}</p>
         <article ref="exportArticleEl" class="preview" />
       </div>
@@ -947,17 +951,15 @@ watch(
   border-radius: 2px;
 }
 
-/* 离屏出图：固定在视口外，宽度固定，不参与滚动与交互。 */
+/* 离屏出图：固定在视口外，宽度按设置（见「我的」里导出图片宽度），不参与滚动与交互。 */
 .export-stage {
   position: fixed;
   inset-block-start: 0;
   inset-inline-start: -10000px;
-  width: 640px;
   pointer-events: none;
 }
 
 .export-card {
-  width: 640px;
   padding: var(--s-6);
   background: var(--c-surface);
   color: var(--c-on-surface);

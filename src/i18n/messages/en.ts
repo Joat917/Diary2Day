@@ -168,6 +168,7 @@ export const en = {
   "theme.sample.forest.text": "Pine needles on the steps, soft underfoot.",
   "me.language": "Language",
   "me.reduceMotion": "Disable animations",
+  "me.exportWidth": "Exported image width",
   "me.calendar": "Calendar",
   "me.weekStart": "Week starts on",
   "me.dateFormat": "Date format",

@@ -13,11 +13,15 @@ use crate::state::AppState;
 
 const READ_BUFFER: usize = 64 * 1024;
 const EXPORT_VIEW_DIR: &str = ".export";
-// 导出卡片宽 640，最多 2 倍像素密度：宽度到 1280 就够。
-// 高度不设限，长图按比例保留；只再用总像素数兜住最终位图大小——
-// Android WebView 会整张拒绝解码大位图（36MP 实测失败），限宽管不到长图。
-const EXPORT_VIEW_MAX_WIDTH: u32 = 1280;
-const EXPORT_VIEW_MAX_PIXELS: u64 = 8_388_608;
+// 副本最多按卡片宽度的 2 倍像素密度准备。
+const EXPORT_VIEW_SCALE: u32 = 2;
+// 高度不设限，长图按比例保留。Android WebView 会整张拒绝解码大位图
+// （36MP 实测失败），限宽管不住长图，所以只在那里再用总像素数兜底；
+// 桌面 WebView 能解码，只按设置宽度限宽。
+#[cfg(target_os = "android")]
+const EXPORT_VIEW_MAX_PIXELS: Option<u64> = Some(8_388_608);
+#[cfg(not(target_os = "android"))]
+const EXPORT_VIEW_MAX_PIXELS: Option<u64> = None;
 
 #[cfg(not(target_os = "android"))]
 pub const MEDIA_EXTENSIONS: &[&str] = &[
@@ -105,18 +109,25 @@ pub struct ExportViewDto {
     pub view: String,
 }
 
-// 大图不在 WebView 里解码，改由这里生成限宽 / 限总像素的副本，导出时替换 img 的 src。
+// 大图不在 WebView 里解码，改由这里生成限宽副本（Android 另限总像素），导出时替换 img 的 src。
 // 高按比例走；已经是小图就不生成，前端继续用原图。
-fn export_view_size(width: u32, height: u32) -> Option<(u32, u32)> {
-    if width <= EXPORT_VIEW_MAX_WIDTH
-        && u64::from(width) * u64::from(height) <= EXPORT_VIEW_MAX_PIXELS
-    {
+fn export_view_size(
+    max_width: u32,
+    max_pixels: Option<u64>,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32)> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width <= max_width && max_pixels.map_or(true, |budget| pixels <= budget) {
         return None;
     }
-    let width_scale = f64::from(EXPORT_VIEW_MAX_WIDTH) / f64::from(width);
-    let pixel_scale =
-        (EXPORT_VIEW_MAX_PIXELS as f64 / (f64::from(width) * f64::from(height))).sqrt();
-    let scale = width_scale.min(pixel_scale).min(1.0);
+    let width_scale = f64::from(max_width) / f64::from(width);
+    let scale = match max_pixels {
+        Some(budget) => width_scale
+            .min((budget as f64 / pixels as f64).sqrt())
+            .min(1.0),
+        None => width_scale.min(1.0),
+    };
     Some((
         ((f64::from(width) * scale).round() as u32).max(1),
         ((f64::from(height) * scale).round() as u32).max(1),
@@ -125,7 +136,7 @@ fn export_view_size(width: u32, height: u32) -> Option<(u32, u32)> {
 
 // 相机 JPEG 的方向在 EXIF 里，WebView 会照它显示，副本也要先拍平；
 // 90°/270° 会交换宽高，尺寸决策必须按拍平后的宽高算。
-fn export_view(name: &str, path: &Path, dir: &Path) -> Option<String> {
+fn export_view(name: &str, path: &Path, dir: &Path, max_width: u32) -> Option<String> {
     use image::metadata::Orientation;
     use image::{DynamicImage, ImageDecoder, ImageReader};
 
@@ -144,12 +155,17 @@ fn export_view(name: &str, path: &Path, dir: &Path) -> Option<String> {
         | Orientation::Rotate270FlipH => (raw_height, raw_width),
         _ => (raw_width, raw_height),
     };
-    let (new_width, new_height) = export_view_size(width, height)?;
+    let (new_width, new_height) =
+        export_view_size(max_width, EXPORT_VIEW_MAX_PIXELS, width, height)?;
 
     let stem = name.rsplit_once('.').map(|(value, _)| value).unwrap_or(name);
     let view = format!("{stem}.webp");
     let view_path = dir.join(&view);
-    if !view_path.is_file() {
+    // 导出宽度可调：已有副本与当前目标宽度不符（调大或调小）就按新尺寸重建。
+    let current_width = image::image_dimensions(&view_path)
+        .map(|(existing, _)| existing)
+        .ok();
+    if current_width != Some(new_width) {
         if fs::create_dir_all(dir).is_err() {
             return None;
         }
@@ -171,15 +187,20 @@ fn export_view(name: &str, path: &Path, dir: &Path) -> Option<String> {
     Some(view)
 }
 
-pub fn export_views(state: &AppState, names: Vec<String>) -> Result<Vec<ExportViewDto>, AppError> {
+pub fn export_views(
+    state: &AppState,
+    names: Vec<String>,
+    width: u32,
+) -> Result<Vec<ExportViewDto>, AppError> {
     let dir = state.paths.assets_dir.join(EXPORT_VIEW_DIR);
+    let max_width = width.clamp(320, 1280).saturating_mul(EXPORT_VIEW_SCALE);
     let mut out = Vec::new();
     for name in names {
         if checked_kind(&name) != Some("image") {
             continue;
         }
         let path = state.paths.assets_dir.join(&name);
-        if let Some(view) = export_view(&name, &path, &dir) {
+        if let Some(view) = export_view(&name, &path, &dir, max_width) {
             out.push(ExportViewDto { name, view });
         }
     }
@@ -460,5 +481,42 @@ pub fn clean_unused(state: &AppState) -> Result<CleanupReport, AppError> {
         }
     }
     Ok(CleanupReport { removed, freed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_view_size;
+
+    const ANDROID_BUDGET: Option<u64> = Some(8_388_608);
+
+    #[test]
+    fn small_images_are_used_as_is() {
+        assert_eq!(export_view_size(1280, ANDROID_BUDGET, 1200, 900), None);
+        assert_eq!(export_view_size(2000, ANDROID_BUDGET, 1920, 1080), None);
+    }
+
+    #[test]
+    fn wide_images_are_limited_by_width_and_keep_aspect() {
+        let (width, height) =
+            export_view_size(1280, ANDROID_BUDGET, 4223, 8598).expect("需要导出副本");
+        assert_eq!(width, 1280);
+        assert_eq!(height, 2606);
+    }
+
+    #[test]
+    fn android_also_limits_total_pixels() {
+        let (width, height) =
+            export_view_size(2560, ANDROID_BUDGET, 2000, 20000).expect("需要导出副本");
+        assert!(width < 2000);
+        assert!((f64::from(height) / f64::from(width) - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn desktop_limits_width_only() {
+        // 桌面不做总像素预算：窄长图原样使用，宽图只按设置宽度缩。
+        assert_eq!(export_view_size(1280, None, 1000, 40000), None);
+        let (width, height) = export_view_size(1280, None, 2000, 20000).expect("需要导出副本");
+        assert_eq!((width, height), (1280, 12800));
+    }
 }
 

@@ -170,6 +170,7 @@ export const zhCN = {
   "theme.sample.forest.text": "松针铺满台阶，踩上去很软。",
   "me.language": "语言",
   "me.reduceMotion": "关闭动画",
+  "me.exportWidth": "导出图片宽度",
   "me.calendar": "日历",
   "me.weekStart": "每周起始日",
   "me.dateFormat": "日期格式",

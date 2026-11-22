@@ -200,8 +200,8 @@ export function assetCleanUnused(): Promise<CleanupReport> {
   return call("asset_clean_unused");
 }
 
-export function assetExportViews(names: string[]): Promise<ExportView[]> {
-  return call("asset_export_views", { names });
+export function assetExportViews(names: string[], width: number): Promise<ExportView[]> {
+  return call("asset_export_views", { names, width });
 }
 
 export function shareDrain(): Promise<ShareReport | null> {

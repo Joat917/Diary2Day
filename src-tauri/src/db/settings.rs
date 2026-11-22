@@ -20,6 +20,7 @@ pub struct Settings {
     pub day_boundary_minutes: u32,
     pub card_time: String,
     pub auto_edit: bool,
+    pub export_width: u32,
 }
 
 impl Default for Settings {
@@ -39,6 +40,7 @@ impl Default for Settings {
             day_boundary_minutes: 0,
             card_time: "recorded".into(),
             auto_edit: true,
+            export_width: 640,
         }
     }
 }
@@ -57,6 +59,7 @@ const KEYS: &[&str] = &[
     "dayBoundaryMinutes",
     "cardTime",
     "autoEdit",
+    "exportWidth",
 ];
 
 fn read_value(conn: &Connection, key: &str) -> Result<Option<Value>, AppError> {
@@ -96,6 +99,7 @@ pub fn get_all(conn: &Connection) -> Result<Settings, AppError> {
         ),
         card_time: read_field(conn, "cardTime", default.card_time),
         auto_edit: read_field(conn, "autoEdit", default.auto_edit),
+        export_width: read_field(conn, "exportWidth", default.export_width),
     })
 }
 
@@ -121,6 +125,9 @@ fn validate(settings: &Settings) -> Result<(), AppError> {
     }
     if !matches!(settings.card_time.as_str(), "recorded" | "updated") {
         return Err(AppError::new("bad_setting", "未知卡片时间来源"));
+    }
+    if !(320..=1280).contains(&settings.export_width) {
+        return Err(AppError::new("bad_setting", "导出图片宽度超出范围"));
     }
     Ok(())
 }
