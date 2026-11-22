@@ -52,6 +52,7 @@ const failReason = ref<string | null>(null);
 const saveError = ref<string | null>(null);
 const editing = ref(false);
 const previewEl = ref<HTMLElement | null>(null);
+const editorWrapEl = ref<HTMLElement | null>(null);
 const editorPane = ref<InstanceType<typeof EditorPane> | null>(null);
 const viewerSrc = ref<string | null>(null);
 
@@ -340,8 +341,6 @@ async function load() {
     if (editing.value) {
       pendingFocus.value = true;
       editorPane.value?.focus();
-    } else {
-      renderPreview();
     }
   } catch (error) {
     if (error instanceof IpcError && error.code === "journal_not_found") {
@@ -370,8 +369,7 @@ watch(
     }
     skipLoadId = "";
     if (previous) {
-      await flushSave();
-      gcDetachedAssets();
+      await gcAfterConfirmedSave();
     }
     sessionAssets.clear();
     loadedAssets = [];
@@ -380,6 +378,12 @@ watch(
   },
   { immediate: true },
 );
+
+// The mode transition is out-in, so the preview mounts after the editor leaves;
+// rendering here instead of right after `editing` flips avoids an empty card.
+watch(previewEl, (element) => {
+  if (element && !editing.value) renderPreview();
+});
 
 function onEditorInput(value: string) {
   content.value = value;
@@ -392,6 +396,36 @@ async function startEdit() {
   pendingFocus.value = true;
   await nextTick();
   editorPane.value?.focus();
+}
+
+// Rust deletes whatever names it is handed, so running GC after a failed save would
+// drop files the stored document still references. Flush first and only collect once
+// the document in the database matches `content`.
+async function gcAfterConfirmedSave() {
+  await flushSave();
+  if (saveState.value === "error") {
+    console.warn(
+      "[assets] cleanup skipped: content was not saved",
+      saveError.value ?? "unknown error",
+    );
+    return;
+  }
+  gcDetachedAssets();
+}
+
+async function leaveEdit() {
+  if (!editing.value) return;
+  editing.value = false;
+  await gcAfterConfirmedSave();
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (!editing.value || !journal.value) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (editorWrapEl.value?.contains(target)) return;
+  if (target.closest(".meta-chips, [role='dialog'], [role='alertdialog']")) return;
+  void leaveEdit();
 }
 
 async function togglePin() {
@@ -451,6 +485,7 @@ onMounted(() => {
   window.addEventListener("blur", onWindowBlur);
   window.addEventListener("beforeunload", onBeforeUnload);
   document.addEventListener("visibilitychange", onVisibility);
+  document.addEventListener("pointerdown", onDocumentPointerDown, true);
 });
 
 onBeforeRouteLeave(async () => {
@@ -459,13 +494,11 @@ onBeforeRouteLeave(async () => {
 });
 
 onBeforeUnmount(() => {
-  void (async () => {
-    await flushSave();
-    gcDetachedAssets();
-  })();
+  void gcAfterConfirmedSave();
   window.removeEventListener("blur", onWindowBlur);
   window.removeEventListener("beforeunload", onBeforeUnload);
   document.removeEventListener("visibilitychange", onVisibility);
+  document.removeEventListener("pointerdown", onDocumentPointerDown, true);
 });
 
 watch(
@@ -575,7 +608,7 @@ watch(
       />
       <template v-else>
         <Transition name="mode" mode="out-in">
-          <div v-if="editing" key="edit" class="editor-wrap">
+          <div v-if="editing" key="edit" ref="editorWrapEl" class="editor-wrap">
             <EditorPane
               ref="editorPane"
               :model-value="content"
