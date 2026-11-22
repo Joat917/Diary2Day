@@ -480,7 +480,7 @@ watch(
 </script>
 
 <template>
-  <div class="view" :class="{ indent: session.settings.indentFirstLine }">
+  <div class="view" :class="{ indent: session.settings.indentFirstLine, wide: isWide }">
     <header class="topbar">
       <button
         class="icon-btn"
@@ -788,10 +788,8 @@ watch(
   transform: scale(0.98);
 }
 
-@media (min-width: 960px) {
-  .fab {
-    bottom: var(--s-6);
-  }
+.view.wide .fab {
+  bottom: var(--s-6);
 }
 
 .not-found {

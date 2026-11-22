@@ -295,7 +295,7 @@ clean ──input──▶ dirty ──1s──▶ saving ──ok──▶ clea
 
 **时间显示归前端**：Rust 只回 `recorded_at` / `recorded_off` / `updated_at` / `day_key` 原始值，格式化全部在前端做，一律 `Intl.DateTimeFormat`。PRD §7 那三个预设对应 ICU 选项组合（`yyyy/MM/dd dddd` → `{dateStyle:'medium', weekday:'short'}`）存进 settings，自定义格式同理；.NET 的 `dddd` 在这里是 `weekday`。修仙模式的 24+ 时刻也在前端算：本地墙钟早于分界点时，日期取前一天、小时 +24（`displayParts`），再交给格式串与 `Intl`。卡片显示哪个时间由设置 `cardTime` 决定（`recorded` 默认 / `updated`）：`updated` 用该时刻的本地 offset 与同一个分界点格式化；排序、游标与 `day_key` 始终基于 `recorded_at`。
 
-**断点**：`useBreakpoint` 用三组 `matchMedia` 订阅 `<600 / ≥960 / ≥1200`，**只在布尔翻转时发布**，组件按 `isNarrow`、`isWide`、`isThreePane` 切换。960 先出两栏（184 侧轨 + 日历 300 + 列表），1200 才出三栏（240 + 300 + 420）；理由见 [UI.md §2](./UI.md)。
+**断点**：`useBreakpoint` 用三组 `matchMedia` 订阅 `<600 / (≥960 或 高 <600 且宽 ≥720) / ≥1200`，**只在布尔翻转时发布**，组件按 `isNarrow`、`isWide`、`isThreePane` 切换。`isWide` 是一条逗号媒体查询：宽度到 960，或横屏手机这种宽度够、高度不足 600 的视口也进宽屏（720 下限保证侧轨 184 + 日历 300 之后列表仍可用）。960 先出两栏（184 侧轨 + 日历 300 + 列表），1200 才出三栏（240 + 300 + 420）；理由见 [UI.md §2](./UI.md)。样式的宽屏分支同样挂在 `isWide` 绑出的 `wide` 类上（`.view.wide`、`.app.wide`），不再单独写 `@media`，避免 JS 与 CSS 两套断点漂移。
 
 ---
 

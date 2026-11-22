@@ -513,10 +513,8 @@ onBeforeUnmount(() => {
   background: var(--c-surface);
 }
 
-@media (min-width: 960px) {
-  .topbar {
-    border-bottom: 1px solid var(--c-hairline);
-  }
+.view.wide .topbar {
+  border-bottom: 1px solid var(--c-hairline);
 }
 
 .topbar > div:first-child {
@@ -554,10 +552,8 @@ onBeforeUnmount(() => {
   padding-bottom: 96px;
 }
 
-@media (min-width: 960px) {
-  .scroll {
-    padding-bottom: var(--s-6);
-  }
+.view.wide .scroll {
+  padding-bottom: var(--s-6);
 }
 
 .day-stack {
